@@ -1,7 +1,7 @@
 /**
  * HyperFrames composition skill — system + user prompt builders.
  *
- * Distilled for prompt-to-MP4 generation in this Cloudflare template.
+ * Distilled for prompt-to-MP4 generation in this self-hosted template.
  * Adapted from the full skill in jrusso1020/llm-stories-hyperframes:
  * stripped of TTS/Whisper/caption-group machinery (this template renders
  * silent visuals for an arbitrary user prompt). Target canvas matches
@@ -17,14 +17,13 @@ const EXAMPLE_COMPOSITION = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=1920, height=1080">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;700&display=block" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 1920px; height: 1080px; overflow: hidden; }
     .composition {
       position: relative; width: 100%; height: 100%;
       background: linear-gradient(135deg, #0d1b2a 0%, #1b263b 55%, #415a77 100%);
-      font-family: 'DM Sans', sans-serif; color: #e0e1dd; overflow: hidden;
+      font-family: Arial, sans-serif; color: #e0e1dd; overflow: hidden;
     }
     .glow {
       position: absolute; top: -160px; right: -120px;
@@ -60,14 +59,14 @@ const EXAMPLE_COMPOSITION = `<!DOCTYPE html>
     <div class="glow"></div>
     <div class="accent-bar"></div>
     <h1 class="headline">Animated HTML, rendered to MP4.</h1>
-    <p class="subline">Prompt → composition → Cloudflare Container → R2.</p>
+    <p class="subline">Prompt → composition → local renderer → MP4.</p>
     <div class="pip pip-1"></div>
     <div class="pip pip-2"></div>
     <div class="pip pip-3"></div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@hyperframes/core/dist/hyperframe.runtime.iife.js"></script>
+  <script src="/_hyperframes/gsap.min.js"></script>
+  <script src="/_hyperframes/hyperframe.runtime.iife.js"></script>
   <script>
     window.__timelines = window.__timelines || {};
     const tl = gsap.timeline({ paused: true });
@@ -108,7 +107,7 @@ Your output MUST include these exact attributes — missing any one fails valida
 
 1. **Root wrapper:** \`<div class="composition" data-composition-id="main" data-width="${TARGET_WIDTH}" data-height="${TARGET_HEIGHT}" data-start="0" data-duration="X">\` where X is total duration in seconds.
 2. **Timeline registration (NOT push):** \`window.__timelines["main"] = tl;\` (object assignment, never .push()).
-3. **CDN scripts in order:** gsap@3.14.2 first, then @hyperframes/core/dist/hyperframe.runtime.iife.js.
+3. **Local scripts in order:** `/_hyperframes/gsap.min.js` first, then `/_hyperframes/hyperframe.runtime.iife.js`.
 
 ### Target canvas
 ${TARGET_WIDTH}×${TARGET_HEIGHT}. Set body and .composition to those exact pixel dimensions.
@@ -161,16 +160,14 @@ Pick a mood before writing: dark/premium, neon/electric, warm/editorial, clean/c
 - **Multi-layer box-shadow** on hero elements: outer shadow + inset highlight + inset bottom shadow.
 
 ### Typography
-- Use a Google Font via \`<link href="https://fonts.googleapis.com/css2?family=NAME:wght@400;700&display=block" rel="stylesheet">\`. Pick one that matches the mood — avoid system-ui, Inter, Roboto, Open Sans, Arial.
+- Use system-available font stacks with sensible fallbacks; do not require a font CDN for rendering.
 - **Weight contrast must be extreme:** pair 700–900 headlines with 300–400 body. 500 vs 600 is invisible in motion.
 - **Hero text:** 80–140px on a ${TARGET_WIDTH}px-wide canvas. Subline: 32–48px.
 
 ---
 
-## Allowed external resources
-- GSAP CDN (required).
-- HyperFrames runtime CDN (required).
-- Google Fonts via \`<link>\` (recommended).
+## Runtime assets
+- Load GSAP and the HyperFrames runtime from the local `/_hyperframes/` paths shown in the skeleton.
 
 ## Forbidden
 - No external images, videos, or other CDN resources.
@@ -188,7 +185,6 @@ const SKELETON_AND_CHECKLIST = `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=${TARGET_WIDTH}, height=${TARGET_HEIGHT}">
-  <link href="https://fonts.googleapis.com/css2?family=YOUR_FONT:wght@400;700&display=block" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: ${TARGET_WIDTH}px; height: ${TARGET_HEIGHT}px; overflow: hidden; }
@@ -200,8 +196,8 @@ const SKELETON_AND_CHECKLIST = `
   <div class="composition" data-composition-id="main" data-width="${TARGET_WIDTH}" data-height="${TARGET_HEIGHT}" data-start="0" data-duration="DURATION">
     <!-- visual elements here. NO <audio> element. -->
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@hyperframes/core/dist/hyperframe.runtime.iife.js"></script>
+  <script src="/_hyperframes/gsap.min.js"></script>
+  <script src="/_hyperframes/hyperframe.runtime.iife.js"></script>
   <script>
     window.__timelines = window.__timelines || {};
     const tl = gsap.timeline({ paused: true });
@@ -215,7 +211,7 @@ const SKELETON_AND_CHECKLIST = `
 ## Pre-submit checklist — output rejected if ANY fail
 - [ ] Root: data-composition-id="main" data-width="${TARGET_WIDTH}" data-height="${TARGET_HEIGHT}" data-start="0" data-duration="X"
 - [ ] Timeline registered: window.__timelines["main"] = tl;
-- [ ] Both CDN scripts present in correct order (gsap@3.14.2 + @hyperframes/core runtime)
+- [ ] Both local scripts present in correct order (GSAP + HyperFrames runtime)
 - [ ] Entrances use tl.fromTo (not tl.from) for deterministic seek
 - [ ] No two transform tweens stacked on the same element
 - [ ] Every tween attached to tl — no bare gsap.to() standalone tweens
@@ -227,7 +223,7 @@ const SKELETON_AND_CHECKLIST = `
 Return ONLY the complete HTML document. No prose, no markdown fences, no explanations. Start with <!DOCTYPE html>.
 `;
 
-const SYSTEM_PROMPT_HEADER = `You are an expert motion graphics designer creating HyperFrames compositions — animated HTML videos. Your output is a single self-contained HTML document that will be rendered to MP4 by a Cloudflare Container running Chromium + FFmpeg.
+const SYSTEM_PROMPT_HEADER = `You are an expert motion graphics designer creating HyperFrames compositions — animated HTML videos. Your output is a single self-contained HTML document that will be rendered to MP4 by the local HyperFrames renderer running Chromium + FFmpeg.
 
 ${HYPERFRAMES_KNOWLEDGE}
 `;
@@ -266,7 +262,7 @@ ${userPrompt}
 ${durationSec.toFixed(2)} seconds total. Set data-duration="${durationSec.toFixed(2)}" on the root .composition div.
 
 ## Your task
-1. Pick a palette + mood that matches the prompt. Pick a Google Font that fits.
+1. Pick a palette + mood that matches the prompt. Use a system font stack that fits.
 2. Design 8–14 visual elements with semantic class names (one per concept the prompt evokes).
 3. Build the composition through three phases: build → breathe → resolve. Continuous motion in breathe phase via 2–3 long-duration ambient tweens.
 4. End with a choreographed exit — 4+ individually-timed exits, hero last.

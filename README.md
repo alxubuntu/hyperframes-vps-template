@@ -1,218 +1,164 @@
-# HyperFrames on Cloudflare — TanStack Start + TanStack AI
+# HyperFrames VPS Template
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/heygen-com/hyperframes-cloudflare-template)
+A self-hosted HyperFrames application built with React, TanStack Start, and TanStack AI. It keeps the browser preview and BYOK AI workflow, renders MP4s in the local Docker container, and stores jobs and videos on persistent host directories. No Cloudflare account, Worker, Durable Object, R2 bucket, Redis, or database is required.
 
-![Template preview — Cloudflare + HyperFrames](./docs/preview.png)
+## What runs locally
 
-<!-- dash-content-start -->
+```text
+Browser ──HTTP──▶ Node.js + TanStack Start
+                      ├── local preview/composition assets
+                      ├── file-backed render queue ──▶ HyperFrames + Chromium + FFmpeg
+                      └── /r/<job-id> ──▶ persistent MP4 in ./data/videos
+```
 
-A [HyperFrames](https://github.com/heygen-com/hyperframes) template built with [TanStack Start](https://tanstack.com/start) that previews HTML video compositions in the browser and renders MP4s server-side using a [Cloudflare Container](https://developers.cloudflare.com/containers/) (Chromium + FFmpeg) and stores them in [R2](https://developers.cloudflare.com/r2/). AI generation streams through [TanStack AI](https://tanstack.com/ai) with the official OpenRouter adapter.
+The API returns a render-job ID immediately. A bounded in-process queue runs renders in the background, and the UI polls job status without keeping the request open. Completed video metadata is stored in `data/videos/jobs.json`; the MP4 bytes are stored as `data/videos/<job-id>.mp4`. Render inputs are kept under `data/projects` and per-job temporary files under `data/temp`.
 
-Demonstrates TanStack Start server routes on Workers (via the Cloudflare Vite plugin), a custom server entry exporting a Container Durable Object, streaming response bodies into R2, and BYOK AI generation over Server-Sent Events with `useChat`.
+The queue is intentionally single-process and local: do not scale this Compose service to multiple replicas. Queued jobs survive restarts; a job interrupted while actively rendering is recorded as failed and can be resubmitted. Completed MP4 files and their metadata survive container recreation.
 
-<!-- dash-content-end -->
+## Requirements
 
-Deploying provisions a Worker, the `RenderContainer` Durable Object, and an R2 bucket (`hyperframes-renders`). Cloudflare Containers requires a [Workers Paid](https://developers.cloudflare.com/workers/platform/pricing/) plan.
+- Ubuntu 22.04 or 24.04, 64-bit; the VPS should have enough free disk for Chromium, temporary renders, and retained MP4s.
+- Docker Engine and the Docker Compose plugin. Install using [Docker's official Ubuntu instructions](https://docs.docker.com/engine/install/ubuntu/).
+- Git to obtain/update this repository.
 
-## What this template does
+The app container includes Node.js 22, HyperFrames, Chromium headless shell, FFmpeg, and locally served GSAP/HyperFrames runtime files. These runtime assets are installed in the image and do not require a public CDN when rendering the bundled composition or standard AI-generated compositions. It does not need host Node.js, Bun, or FFmpeg for production.
 
-- **Preview** a bundled composition (`cloudflare-intro`) in the browser using `<hyperframes-player>`, the zero-dependency web component from `@hyperframes/player`.
-- **Render** the composition to an MP4 by POSTing to `/api/render`. The server route streams the composition to a Cloudflare Container running a pre-built image with Chromium + FFmpeg + HyperFrames, streams the rendered MP4 directly into R2, and returns a URL.
-- **Generate from a prompt (BYOK)** — log in with OpenRouter (OAuth PKCE, or paste an API key) and type a text prompt; the `/api/generate` route runs [TanStack AI's `chat()`](https://tanstack.com/ai) with the OpenRouter adapter (Gemini 3 Flash by default) and streams the composition to the browser over SSE as it's written. The client lints the result with `@hyperframes/core/lint` via a server function and self-heals up to 2× as follow-up chat turns, then previews it in the player. Click "Render MP4" to capture it. See [AI generation](#ai-generation-byok).
+## Install and run on Ubuntu
 
-**Authoring happens locally.** This template ships with one pre-authored composition. To build your own, use the HyperFrames CLI on your machine:
+From the repository directory:
 
 ```bash
-npx hyperframes init my-video
-cd my-video
-npx hyperframes preview   # live-reload editor in your browser
+cp .env.example .env
+mkdir -p data/projects data/temp data/videos
+# The image runs as UID/GID 1000 (`node`); make the bind mounts writable.
+sudo chown -R 1000:1000 data
+docker compose build
+docker compose up -d --wait
+docker compose ps
+curl -fsS http://127.0.0.1:3000/healthz
 ```
 
-Then swap it into this template (see [Swapping the composition](#swapping-the-composition) below).
+Open the application through your reverse proxy. The Compose port is bound to `127.0.0.1` by default so the Node service is not exposed directly to the public Internet. Change `WEB_PORT` in `.env` to choose another loopback port.
 
-## Architecture
+To stop the service without deleting video data:
 
-```
- Browser                          Worker (TanStack Start)             Container DO (instance_type: standard-4)
-┌─────────────────────┐          ┌────────────────────────┐          ┌──────────────────────────────────┐
-│ React UI (routes/)  │  ─────▶  │ /api/render            │  ─────▶  │ Node HTTP server (port 8080)     │
-│ <hyperframes-       │          │  - load files from     │          │  - writes files to /tmp/         │
-│  player> iframe     │          │    ASSETS              │          │  - hyperframes render            │
-│                     │          │  - POST → container    │          │    (Chromium + ffmpeg)           │
-│ useChat (TanStack   │  ◀────   │  - stream → R2 bucket  │  ◀─────  │  - streams mp4 in response       │
-│  AI) — SSE stream   │   url    │  - return /r/<key>     │    mp4   │                                  │
-└─────────────────────┘          ├────────────────────────┤          └──────────────────────────────────┘
-                                 │ /api/generate          │
-                                 │  - chat() + OpenRouter │ ─▶ openrouter.ai (BYOK, SSE back to browser)
-                                 │ lintComposition()      │
-                                 │  - server function     │
-                                 └────────────────────────┘
-                                        │
-                                        ├─▶ R2 (hyperframes-renders)
-                                        └─▶ ASSETS (client build, preview HTML, composition files)
+```bash
+docker compose stop
 ```
 
-The Worker entry is `src/server.ts` — TanStack Start's fetch handler plus the `RenderContainer` Durable Object export, which wrangler requires to live on the `main` module.
+To start it again:
 
-### The container image
+```bash
+docker compose up -d
+```
 
-Cold-start of a render container is faster than installing dependencies on every request because the renderer is **baked into the image** at build time, not installed at runtime:
+Do not remove the `data/` directories when removing or replacing containers. They contain project inputs, temporary files, the job registry, and completed MP4s.
 
-1. `node:22-bookworm-slim` base
-2. `apt-get install` Chromium system libs (`libnss3`, `libxcomposite1`, `pango`, …)
-3. `npm install hyperframes ffmpeg-static`
-4. Symlink `ffmpeg-static/ffmpeg` to `/usr/local/bin/ffmpeg`
-5. `npx hyperframes browser ensure` to download `chrome-headless-shell`
-6. Copy `container/server.mjs` (a small Node HTTP server) and `CMD ["node", "server.mjs"]`
+## Configuration
 
-At render time, the server route sends composition files in the request body, the container writes them to a tmp dir, runs `hyperframes render`, and streams the MP4 back. Container instances sleep after 10 minutes of inactivity (`sleepAfter` on the Container class).
+Copy `.env.example` to `.env` and edit the values before the first run:
 
-### Why Cloudflare Containers (and not Browser Rendering)
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `WEB_PORT` | `3000` | Host loopback port published by Compose. |
+| `ENABLE_AI_GEN` | `true` | Enables BYOK generation and custom-HTML rendering. Set `false` for a public demo that only renders the bundled composition. |
+| `PREVIEW_COMPOSITION_DIR` | `compositions/cloudflare-intro` | Bundled composition directory. It is a Docker build argument; rebuild the image after changing it. |
+| `RENDER_CONCURRENCY` | `1` | Simultaneous render jobs in this process; keep at `1` unless you have measured the memory cost. |
+| `RENDER_WORKERS` | `4` | HyperFrames workers per render. Each worker starts a Chromium process. Tune against available CPU and RAM. |
+| `RENDER_TIMEOUT_MS` | `600000` | Maximum time allowed for one render before it is terminated. |
+| `TRUST_PROXY_HEADERS` | `false` | Set `true` only when a trusted reverse proxy overwrites forwarded host/protocol headers. |
 
-Cloudflare's [Browser Rendering](https://developers.cloudflare.com/browser-rendering/) is a hosted Chromium API — great for screenshots and PDFs, but you can't install FFmpeg into it. HyperFrames needs full control of the Chromium process plus an FFmpeg binary on the same filesystem, which is exactly what [Cloudflare Containers](https://developers.cloudflare.com/containers/) gives you: an OCI container in a Worker-bound Durable Object, with up to 4 vCPUs and 12 GiB of RAM on `standard-4`.
+AI generation uses the existing OpenRouter BYOK flow. The user supplies an OpenRouter key in the UI; it is used for that request and is not stored by this application. When AI is enabled, requests to OpenRouter are an optional external dependency; previewing and rendering the bundled composition do not depend on it.
 
-With 4 vCPUs, `hyperframes render --workers auto` launches 3 parallel Chrome workers, cutting the render time roughly 2× vs. the single-worker default.
+## Reverse proxy example
 
-## Local development
+Configure Nginx or Traefik to forward the public site to `http://127.0.0.1:3000`. For Nginx, allow the custom HTML body limit and disable buffering so AI Server-Sent Events stream through:
+
+```nginx
+location / {
+    client_max_body_size 3m;
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_buffering off;
+    proxy_read_timeout 15m;
+}
+```
+
+Then set `TRUST_PROXY_HEADERS=true` in `.env` and recreate the service. Keep the upstream port private; only the proxy should reach it. The app intentionally adds no authentication layer, so protect it at the proxy/network boundary if it is not intended for public use. Rendering untrusted generated HTML consumes CPU/RAM; turn off AI/custom HTML for a public bundled-only demo.
+
+## Build, run, and update
+
+Build and start the app:
+
+```bash
+docker compose build
+docker compose up -d --wait
+```
+
+Update after bringing the desired repository revision onto the VPS:
+
+```bash
+docker compose build --pull
+docker compose up -d --wait
+docker compose ps
+```
+
+This replaces the application container but keeps all three bind-mounted `data/` directories. Back them up before changing hosts or rebuilding storage. A basic backup can be made while the app is stopped:
+
+```bash
+docker compose stop
+tar -czf hyperframes-data-$(date +%F).tar.gz data/
+docker compose start
+```
+
+## Local development and checks
+
+For development outside Docker, use Node.js 22 and Bun (the repository's `bun.lock` is the dependency lockfile):
 
 ```bash
 bun install
-bun run dev
 ```
 
-`bun run dev` regenerates the composition manifest/preview bundle (`scripts/build.mjs`) and starts Vite on port 3000. The [Cloudflare Vite plugin](https://developers.cloudflare.com/workers/vite-plugin/) runs the Worker runtime locally, including building + running the render container against your local Docker daemon (Docker is required for local container dev). The browser preview works without Docker; only `/api/render` needs the container.
-
-### Checks
+The local render API also needs the HyperFrames CLI and its headless browser. Install the same renderer dependency used by the container and prepare its browser once:
 
 ```bash
-bun run typecheck   # tsc --noEmit
-bun run test        # vitest
-bun run lint        # oxlint
-bun run format      # oxfmt (use format:check in CI)
+npm install --prefix renderer --no-package-lock
+./renderer/node_modules/.bin/hyperframes browser ensure
+# Use that renderer when starting local dev from this directory.
+export HYPERFRAMES_BIN=./renderer/node_modules/.bin/hyperframes
+npm run dev
 ```
 
-CI runs all of these plus a production build. `package.json` and `wrangler.jsonc`
-are excluded from the formatter on purpose — see the note in `.prettierignore`.
-
-### Testing the render container in isolation
-
-If you want to iterate on the `Dockerfile` or `container/server.mjs` without booting the dev server, you can hit the container directly:
+Run the project checks with:
 
 ```bash
-docker build -t hf-render .
-docker run -d --rm --name hf-test -p 18080:8080 hf-render
-node scripts/test-render.mjs 18080 /tmp/out.mp4
-docker stop hf-test
+npm test
+npm run typecheck
+npm run build
 ```
 
-The script reads `src/composition-manifest.json`, base64-encodes the composition files, POSTs them to the container, and writes the MP4 it returns. The bundled 9s composition renders in ~17s on a 6-vCPU host.
+## Cloudflare dependencies removed and replacements
 
-## Project structure
+| Original surface | Replacement |
+| --- | --- |
+| Cloudflare Workers runtime and `cloudflare:workers` environment imports | Node.js 22 HTTP server and `process.env`; TanStack Start requests are forwarded to its fetch handler. |
+| Cloudflare Vite plugin / Worker-specific build target | Standard TanStack Start + Vite build, served by `server.mjs`. |
+| `RenderContainer` Durable Object and `@cloudflare/containers` | Local bounded render queue in the Node process; job state is stored as JSON on the videos volume. Running renders are marked failed after a process restart rather than left stuck. |
+| Cloudflare R2 (`RENDERS`) | MP4 files and job metadata under `data/videos`, persisted by a Compose bind mount. The `/r/<id>` endpoint supports playback, byte ranges, and download. |
+| Cloudflare `ASSETS` binding | Read-only local `public/` filesystem access for composition and preview assets. |
+| `wrangler.jsonc`, generated Worker types, Wrangler scripts, and Cloudflare container source | Removed; Docker Compose is the production deployment and healthcheck path. |
 
-```
-src/
-  server.ts                   # Worker entry — Start fetch handler + RenderContainer export
-  container.ts                # RenderContainer Durable Object
-  router.tsx                  # TanStack Router setup
-  composition-manifest.json   # Generated by scripts/build.mjs
-  routes/
-    __root.tsx                # Document shell (loads /_hyperframes/player.js)
-    index.tsx                 # Preview UI page
-    r.$.ts                    # GET /r/<key> — serve MP4s from R2
-    api/
-      render.ts               # POST /api/render — composition → container → R2
-      preview.ts              # GET /api/preview — bundled preview HTML
-      generate.ts             # POST /api/generate — TanStack AI chat() + OpenRouter (SSE)
-  components/
-    Player.tsx                # <hyperframes-player> wrapper
-    AiPanel.tsx               # BYOK prompt panel — useChat + lint/self-heal loop
-    RenderControls.tsx        # Render MP4 button + reset
-  lib/
-    generation.ts             # Shared client/server generation helpers
-    server-fns.ts             # Server functions: getAppConfig, lintComposition
-    hyperframes-skill.ts      # System + task prompts for composition generation
-    server/                   # Server-only helpers (assets, lint)
-container/
-  server.mjs                  # Node HTTP server inside the container
-  package.json                # Container deps (hyperframes + ffmpeg-static)
-public/
-  compositions/
-    cloudflare-intro/         # The bundled example composition
-scripts/
-  build.mjs                   # Manifest + preview bundle + player.js copy (runs before dev/build)
-  bundle-preview.ts           # Bundles composition into single HTML via @hyperframes/core
-  test-render.mjs             # Local container E2E
-Dockerfile                    # Render container image
-vite.config.ts                # Cloudflare plugin + TanStack Start + React
-wrangler.jsonc                # Worker + Container + R2 bindings (main: src/server.ts)
-```
+The bundled sample composition retains its original Cloudflare-themed creative content and folder name (`cloudflare-intro`); that is sample video content only, not an infrastructure dependency. HyperFrames, React, TanStack Start/AI, the browser preview, OAuth integration, OpenRouter BYOK generation, and the player are retained.
 
-## Swapping the composition
+## Known limits
 
-1. Drop your composition bundle into `public/compositions/<your-name>/`.
-2. Set `PREVIEW_COMPOSITION_DIR` env var when running build/deploy:
-   ```bash
-   PREVIEW_COMPOSITION_DIR=compositions/<your-name> bun run deploy
-   ```
-   Or edit the default in `scripts/build.mjs` (line 9).
-3. Optionally update the player dimensions in `src/components/Player.tsx` if your composition isn't 1920×1080.
-4. Re-run `bun run dev` or `bun run deploy` — `scripts/build.mjs` regenerates the manifest and bundle.
-
-## AI generation (BYOK)
-
-The "Generate from a prompt" panel lets a viewer log in with their own OpenRouter account (OAuth PKCE — or paste an API key manually), type a description, and synthesize a HyperFrames composition end-to-end — watching it stream in live. The composition previews in the player; the Render button then captures it to MP4 just like the bundled one.
-
-Built on [TanStack AI](https://tanstack.com/ai): `chat()` + `@tanstack/ai-openrouter` on the server, `useChat` from `@tanstack/ai-react` on the client, wired over Server-Sent Events.
-
-### Enabling it
-
-It's already on for self-deployers — `wrangler.jsonc` sets `ENABLE_AI_GEN: "true"` in `vars`. Set it to `"false"` if you're hosting a public demo: that disables both `/api/generate` and rendering custom HTML through `/api/render`, so visitors can only render the bundled composition on your account.
-
-### How the API key is handled
-
-- **Login (default):** "Log in with OpenRouter" runs [OpenRouter's OAuth PKCE flow](https://openrouter.ai/docs/use-cases/oauth-pkce) entirely in the browser (`src/lib/openrouter-oauth.ts`) — redirect to `openrouter.ai/auth`, then exchange the one-time code client-side for a runtime API key scoped to this app (revocable from the OpenRouter dashboard). No client secret; the key never touches the Worker outside of generate requests. The PKCE code verifier sits in `sessionStorage` only across the redirect and is deleted on return, before any generated composition can run.
-- **Manual (fallback):** the user can still paste a key into the panel instead.
-- Either way the key is sent in the `forwardedProps` field of each `POST /api/generate` request body (the client uses a custom `useChat` fetcher, so every request carries the current key).
-- The server route constructs a per-request OpenRouter adapter with the key; TanStack AI forwards it to `openrouter.ai` as `Authorization: Bearer <key>`.
-- The Worker does not log, cache, or persist the key. It exists only for the duration of one request.
-- Client-side, the key is held in React state only — never in `sessionStorage` or `localStorage`. Generated compositions execute in the player's iframe with same-origin access, so origin-readable storage would expose the key to model-generated code. Keeping it out of storage removes that trivial read, but it is not an isolation boundary — same-origin generated code can still reach `window.parent` and recover the key from app state, so assume a determined composition can read it. The real blast-radius control is the key itself: use a disposable, spend-capped key and revoke it from the OpenRouter dashboard when done. A reload clears it from the browser.
-
-### Pipeline
-
-```
-prompt + key
-   │
-   ▼
-useChat fetcher ─▶ POST /api/generate            (server route)
-   │                  │
-   │                  ├─▶ systemPrompts: hyperframes skill (src/lib/hyperframes-skill.ts)
-   │                  ├─▶ chat() + createOpenRouterText(model, key)   (Gemini 3 Flash default)
-   │                  └─▶ SSE stream back to the browser (composition streams in live)
-   │
-   ├─▶ onFinish: extract HTML → lintComposition()   (server function, @hyperframes/core/lint)
-   ├─▶ lint errors? send a fix message as the next chat turn (≤2 retries, temp 0.3)
-   └─▶ clean (or out of retries): player.setAttribute("srcdoc", html)
-
-POST /api/render { html }               (existing endpoint, accepts inline HTML)
-   │
-   └─▶ container → MP4 → R2 → /r/<key>
-```
-
-The default model is `google/gemini-3-flash-preview` — cheapest and fastest direct generation per ~80 eval runs in [llm-stories-hyperframes](https://github.com/jrusso1020/llm-stories-hyperframes), which the prompt is adapted from. You can pass a different `model` in `forwardedProps` to swap in any [OpenRouter model](https://openrouter.ai/models), and a `durationSec` number to change the target composition length.
-
-## Pricing
-
-[Cloudflare Containers pricing](https://developers.cloudflare.com/containers/pricing/) — pay-per-10ms for memory, CPU, and disk. A 70-second render on `standard-4` (4 vCPU, 12 GiB) costs ~$0.008. R2 storage is $0.015/GB-month with no egress fees within Cloudflare's network.
-
-## License
-
-[Apache-2.0](./LICENSE) — same license as HyperFrames itself.
-
-## Links
-
-- [HyperFrames repo](https://github.com/heygen-com/hyperframes)
-- [HyperFrames docs](https://hyperframes.heygen.com)
-- [TanStack Start docs](https://tanstack.com/start)
-- [TanStack AI docs](https://tanstack.com/ai)
-- [Cloudflare Containers docs](https://developers.cloudflare.com/containers/)
-- [Cloudflare R2 docs](https://developers.cloudflare.com/r2/)
+- The render queue is process-local and intended for one Compose replica. There is no distributed queue or cross-process locking.
+- A render actively running during a container restart is not resumed automatically; its job is marked failed. Completed videos and queued job payloads persist.
+- AI generation still calls OpenRouter when enabled. Disable it with `ENABLE_AI_GEN=false` if you require no outbound AI API use.
+- Custom HTML can still explicitly request its own external fonts, images, or scripts; those user-authored URLs are not mirrored by the template.
+- Existing videos held in a previous Cloudflare R2 bucket are not imported automatically; old R2 URLs do not resolve through the local `/r/<id>` route. Export any videos you need separately before switching links.
+- No authentication is added. Use a trusted private network or add protection at your reverse proxy before exposing the application.

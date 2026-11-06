@@ -11,7 +11,7 @@ export const Route = createFileRoute("/api/preview")({
   server: {
     handlers: {
       GET: async ({ request }) => {
-        const res = await fetchAsset("_bundled/preview.html", new URL(request.url).origin);
+        const res = await fetchAsset("_bundled/preview.html");
         if (!res.ok) {
           return new Response("preview bundle missing — run build", { status: 500 });
         }

@@ -1,0 +1,34 @@
+services:
+  hyperframes:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PREVIEW_COMPOSITION_DIR: ${PREVIEW_COMPOSITION_DIR:-compositions/cloudflare-intro}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      PROJECTS_DIR: /data/projects
+      RENDER_TEMP_DIR: /data/temp
+      RENDERS_DIR: /data/videos
+      HYPERFRAMES_BIN: /app/renderer/node_modules/.bin/hyperframes
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    volumes:
+      - ./data/projects:/data/projects
+      - ./data/temp:/data/temp
+      - ./data/videos:/data/videos
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 2m
+      retries: 3

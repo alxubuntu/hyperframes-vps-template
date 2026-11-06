@@ -1,6 +1,6 @@
 // Captures docs/preview.png. Two modes:
-//   default — local HTML card (Cloudflare + HyperFrames logos), matches Vercel template style
-//   --live  — screenshot of the deployed site (composition rendered in player)
+//   default — local HTML card
+//   --live  — screenshot of the locally running site (composition rendered in player)
 
 import { chromium } from "playwright";
 import { readFile } from "node:fs/promises";
@@ -17,7 +17,7 @@ const page = await browser.newPage({
 });
 
 if (live) {
-  const url = "https://hyperframes-on-cloudflare.jdrusso1020.workers.dev/";
+  const url = process.env.APP_URL || "http://localhost:3000";
   await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
   await page.waitForFunction(
     () => document.querySelector("hyperframes-player")?.ready === true,

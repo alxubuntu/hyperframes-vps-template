@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { env } from "cloudflare:workers";
 import { chat, toServerSentEventsResponse } from "@tanstack/ai";
 import { createOpenRouterText } from "@tanstack/ai-openrouter";
 
@@ -58,9 +57,9 @@ export const Route = createFileRoute("/api/generate")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        if (env.ENABLE_AI_GEN !== "true") {
+        if (process.env.ENABLE_AI_GEN !== "true") {
           return jsonError(
-            'AI generation is disabled on this deployment. Set ENABLE_AI_GEN="true" in wrangler.jsonc vars to enable BYOK generation.',
+            'AI generation is disabled. Set ENABLE_AI_GEN="true" in your .env file to enable BYOK generation.',
             403,
           );
         }
@@ -130,7 +129,7 @@ export const Route = createFileRoute("/api/generate")({
         // The user's key is used for this one upstream call and never stored.
         const adapter = createOpenRouterText(model, apiKey, {
           httpReferer: request.headers.get("origin") ?? new URL(request.url).origin,
-          appTitle: "HyperFrames Cloudflare Template",
+          appTitle: "HyperFrames VPS Template",
         });
 
         try {

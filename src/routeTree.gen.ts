@@ -13,6 +13,8 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiGenerateRouteImport } from './routes/api/generate'
 import { Route as ApiPreviewRouteImport } from './routes/api/preview'
 import { Route as ApiRenderRouteImport } from './routes/api/render'
+import { Route as ApiRenderStatusRouteImport } from './routes/api/render-status'
+import { Route as ApiRendersRouteImport } from './routes/api/renders'
 import { Route as RSplatRouteImport } from './routes/r.$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -35,6 +37,16 @@ const ApiRenderRoute = ApiRenderRouteImport.update({
   path: '/api/render',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiRenderStatusRoute = ApiRenderStatusRouteImport.update({
+  id: '/api/render-status',
+  path: '/api/render-status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRendersRoute = ApiRendersRouteImport.update({
+  id: '/api/renders',
+  path: '/api/renders',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const RSplatRoute = RSplatRouteImport.update({
   id: '/r/$',
   path: '/r/$',
@@ -46,6 +58,8 @@ export interface FileRoutesByFullPath {
   '/api/generate': typeof ApiGenerateRoute
   '/api/preview': typeof ApiPreviewRoute
   '/api/render': typeof ApiRenderRoute
+  '/api/render-status': typeof ApiRenderStatusRoute
+  '/api/renders': typeof ApiRendersRoute
   '/r/$': typeof RSplatRoute
 }
 export interface FileRoutesByTo {
@@ -53,6 +67,8 @@ export interface FileRoutesByTo {
   '/api/generate': typeof ApiGenerateRoute
   '/api/preview': typeof ApiPreviewRoute
   '/api/render': typeof ApiRenderRoute
+  '/api/render-status': typeof ApiRenderStatusRoute
+  '/api/renders': typeof ApiRendersRoute
   '/r/$': typeof RSplatRoute
 }
 export interface FileRoutesById {
@@ -61,15 +77,17 @@ export interface FileRoutesById {
   '/api/generate': typeof ApiGenerateRoute
   '/api/preview': typeof ApiPreviewRoute
   '/api/render': typeof ApiRenderRoute
+  '/api/render-status': typeof ApiRenderStatusRoute
+  '/api/renders': typeof ApiRendersRoute
   '/r/$': typeof RSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/generate' | '/api/preview' | '/api/render' | '/r/$'
+  fullPaths: '/' | '/api/generate' | '/api/preview' | '/api/render' | '/api/render-status' | '/api/renders' | '/r/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/generate' | '/api/preview' | '/api/render' | '/r/$'
+  to: '/' | '/api/generate' | '/api/preview' | '/api/render' | '/api/render-status' | '/api/renders' | '/r/$'
   id:
-    '__root__' | '/' | '/api/generate' | '/api/preview' | '/api/render' | '/r/$'
+    '__root__' | '/' | '/api/generate' | '/api/preview' | '/api/render' | '/api/render-status' | '/api/renders' | '/r/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -77,6 +95,8 @@ export interface RootRouteChildren {
   ApiGenerateRoute: typeof ApiGenerateRoute
   ApiPreviewRoute: typeof ApiPreviewRoute
   ApiRenderRoute: typeof ApiRenderRoute
+  ApiRenderStatusRoute: typeof ApiRenderStatusRoute
+  ApiRendersRoute: typeof ApiRendersRoute
   RSplatRoute: typeof RSplatRoute
 }
 
@@ -110,6 +130,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiRenderRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/render-status': {
+      id: '/api/render-status'
+      path: '/api/render-status'
+      fullPath: '/api/render-status'
+      preLoaderRoute: typeof ApiRenderStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/renders': {
+      id: '/api/renders'
+      path: '/api/renders'
+      fullPath: '/api/renders'
+      preLoaderRoute: typeof ApiRendersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/r/$': {
       id: '/r/$'
       path: '/r/$'
@@ -125,6 +159,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGenerateRoute: ApiGenerateRoute,
   ApiPreviewRoute: ApiPreviewRoute,
   ApiRenderRoute: ApiRenderRoute,
+  ApiRenderStatusRoute: ApiRenderStatusRoute,
+  ApiRendersRoute: ApiRendersRoute,
   RSplatRoute: RSplatRoute,
 }
 export const routeTree = rootRouteImport

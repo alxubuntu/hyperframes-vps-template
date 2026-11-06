@@ -1,4 +1,5 @@
-import { env } from "cloudflare:workers";
+import { readFile } from "node:fs/promises";
+import { extname, resolve, sep } from "node:path";
 import manifest from "../../composition-manifest.json";
 import { bufferToBase64, utf8Encode } from "../encoding";
 
@@ -11,17 +12,37 @@ export interface CompositionFile {
   content: string;
 }
 
-// The origin must be the incoming request's own origin: the Vite plugin's dev
-// emulation of the assets binding rejects cross-origin URLs (403), while the
-// deployed binding ignores the host entirely.
-export function fetchAsset(path: string, origin: string): Promise<Response> {
-  return env.ASSETS.fetch(new Request(`${origin}/${path}`));
+const CONTENT_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".mp4": "video/mp4",
+};
+
+export async function fetchAsset(path: string): Promise<Response> {
+  const publicRoot = resolve(process.cwd(), "public");
+  const assetPath = resolve(publicRoot, path);
+  if (!assetPath.startsWith(`${publicRoot}${sep}`)) return new Response("not found", { status: 404 });
+  try {
+    const bytes = await readFile(assetPath);
+    return new Response(bytes as BodyInit, {
+      headers: { "content-type": CONTENT_TYPES[extname(assetPath)] ?? "application/octet-stream" },
+    });
+  } catch {
+    return new Response("not found", { status: 404 });
+  }
 }
 
-export async function loadBundledCompositionFiles(origin: string): Promise<CompositionFile[]> {
+export async function loadBundledCompositionFiles(): Promise<CompositionFile[]> {
   return Promise.all(
     manifest.files.map(async (rel) => {
-      const res = await fetchAsset(`${manifest.dir}/${rel}`, origin);
+      const res = await fetchAsset(`${manifest.dir}/${rel}`);
       if (!res.ok) throw new Error(`asset missing: ${rel} (${res.status})`);
       const buf = new Uint8Array(await res.arrayBuffer());
       return { path: rel, content: bufferToBase64(buf) };

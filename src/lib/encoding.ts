@@ -1,4 +1,4 @@
-// Pure encoding helpers — no Cloudflare imports, so plain vitest can cover them.
+// Pure encoding helpers that can be exercised without starting the application server.
 
 const ENCODER = new TextEncoder();
 
@@ -10,9 +10,8 @@ export function utf8ByteLength(s: string): number {
   return ENCODER.encode(s).byteLength;
 }
 
-// Native Uint8Array.prototype.toBase64 (TC39 ArrayBuffer-base64, in Workers'
-// V8 and Node 25+) — not in tsconfig's ES2023 lib or Node 22 LTS, hence the
-// typed feature check and fallback.
+// Use a runtime-native base64 method when available, with a bounded fallback
+// for Node 22 and runtimes whose TypeScript lib does not expose it.
 type Uint8ArrayWithBase64 = Uint8Array & { toBase64?: () => string };
 
 export function bufferToBase64(bytes: Uint8Array): string {

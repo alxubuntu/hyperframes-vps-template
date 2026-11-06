@@ -1,5 +1,4 @@
-// Run by the prepare-assets npm script before vite dev/build. The manifest exists because
-// the ASSETS binding can fetch but not list. The bundle exists because the
+// Run before dev/build. The manifest lists the composition files and the
 // player can't stitch sub-compositions together at preview time without it.
 
 import { spawn } from "node:child_process";
@@ -32,7 +31,7 @@ async function bundlePreview() {
   const tsxBin = join("node_modules", ".bin", "tsx");
 
   const html = await new Promise((resolveBundle, reject) => {
-    const child = spawn(tsxBin, ["scripts/bundle-preview.ts", compRoot], {
+    const child = spawn(process.execPath, [tsxBin, "scripts/bundle-preview.ts", compRoot], {
       stdio: ["ignore", "pipe", "inherit"],
     });
     const chunks = [];
@@ -56,6 +55,24 @@ async function copyPlayer() {
   console.log(`[build] copied ${dest}`);
 }
 
+async function copyRendererAssets() {
+  const assets = [
+    ["renderer/node_modules/gsap/dist/gsap.min.js", "gsap.min.js"],
+    ["node_modules/@hyperframes/core/dist/hyperframe.runtime.iife.js", "hyperframe.runtime.iife.js"],
+  ];
+  const compositionAssets = join(compRoot, "assets");
+  const publicAssets = "public/_hyperframes";
+  await Promise.all([mkdir(compositionAssets, { recursive: true }), mkdir(publicAssets, { recursive: true })]);
+  await Promise.all(
+    assets.flatMap(([source, name]) => [
+      copyFile(source, join(compositionAssets, name)),
+      copyFile(source, join(publicAssets, name)),
+    ]),
+  );
+  console.log("[build] copied local GSAP and HyperFrames runtime assets");
+}
+
+await copyRendererAssets();
 await writeManifest();
 await bundlePreview();
 await copyPlayer();

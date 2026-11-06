@@ -1,6 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { env } from "cloudflare:workers";
-import { getContainer } from "@cloudflare/containers";
 import {
   htmlToFiles,
   isJsonRequest,
@@ -10,6 +8,7 @@ import {
   utf8ByteLength,
   type CompositionFile,
 } from "../../lib/server/assets";
+import { enqueueRender } from "../../lib/server/render-jobs.mjs";
 
 const MAX_RENDER_HTML_BYTES = 2 * 1024 * 1024;
 
@@ -21,8 +20,6 @@ export const Route = createFileRoute("/api/render")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const t0 = Date.now();
-
         let files: CompositionFile[];
         let source: "bundled" | "html" = "bundled";
 
@@ -38,12 +35,10 @@ export const Route = createFileRoute("/api/render")({
         }
 
         if (body?.html) {
-          // Same gate as /api/generate: without it, ENABLE_AI_GEN="false"
-          // deployments would still let anyone run the render container on
-          // arbitrary HTML. The bundled-composition path below stays open.
-          if (env.ENABLE_AI_GEN !== "true") {
+          // Keep custom HTML rendering behind the same opt-in as AI generation.
+          if (process.env.ENABLE_AI_GEN !== "true") {
             return jsonError(
-              'Rendering custom HTML is disabled on this deployment. Set ENABLE_AI_GEN="true" in wrangler.jsonc vars to enable it.',
+              'Rendering custom HTML is disabled. Set ENABLE_AI_GEN="true" in your .env file to enable it.',
               403,
             );
           }
@@ -57,50 +52,22 @@ export const Route = createFileRoute("/api/render")({
           source = "html";
         } else {
           try {
-            files = await loadBundledCompositionFiles(new URL(request.url).origin);
+            files = await loadBundledCompositionFiles();
           } catch (err) {
             return jsonError(`failed to load composition: ${msg(err)}`, 500);
           }
         }
 
-        const container = getContainer(env.RENDER_CONTAINER, "renderer");
-        let containerRes: Response;
+        let job;
         try {
-          containerRes = await container.fetch(
-            new Request("http://container/render", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ files }),
-            }),
-          );
+          job = await enqueueRender(files, source);
         } catch (err) {
-          return jsonError(`container unavailable: ${msg(err)}`, 502);
+          return jsonError(`failed to queue render: ${msg(err)}`, 400);
         }
-
-        if (!containerRes.ok) {
-          const errBody = await containerRes.text().catch(() => "");
-          return jsonError(`render failed (${containerRes.status}): ${errBody}`, 502);
-        }
-
-        const key = `renders/${Date.now()}-${crypto.randomUUID()}.mp4`;
-        try {
-          await env.RENDERS.put(key, containerRes.body, {
-            httpMetadata: { contentType: "video/mp4" },
-          });
-        } catch (err) {
-          console.error(`R2 put failed for ${key} (source: ${source}, ${Date.now() - t0}ms):`, err);
-          return jsonError(`failed to store rendered video: ${msg(err)}`, 500);
-        }
-
-        const url = new URL(request.url);
-        url.pathname = `/r/${key}`;
-
-        return Response.json({
-          url: url.toString(),
-          key,
-          source,
-          durationMs: Date.now() - t0,
-        });
+        return Response.json(
+          { id: job.id, status: job.status, statusUrl: `/api/render-status?id=${job.id}` },
+          { status: 202 },
+        );
       },
     },
   },

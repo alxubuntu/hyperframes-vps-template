@@ -2,7 +2,9 @@
   "dir": "compositions/cloudflare-intro",
   "files": [
     "assets/cloudflare.svg",
+    "assets/gsap.min.js",
     "assets/hfsquare.svg",
+    "assets/hyperframe.runtime.iife.js",
     "index.html"
   ]
 }

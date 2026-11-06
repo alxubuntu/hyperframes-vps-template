@@ -1,0 +1,366 @@
+import { spawn } from "node:child_process";
+import { createReadStream } from "node:fs";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { dirname, join, resolve, sep } from "node:path";
+import { randomUUID } from "node:crypto";
+
+const MAX_FILES = 2_000;
+const MAX_FILES_BYTES = 200 * 1024 * 1024;
+const MAX_ERROR_CHARS = 16_000;
+const DEFAULT_RENDER_TIMEOUT_MS = 10 * 60 * 1_000;
+
+function inside(root, candidate) {
+  const absoluteRoot = resolve(root);
+  const absoluteCandidate = resolve(candidate);
+  return absoluteCandidate.startsWith(`${absoluteRoot}${sep}`);
+}
+
+function safeJoin(root, relativePath) {
+  if (
+    typeof relativePath !== "string" ||
+    relativePath.length === 0 ||
+    relativePath.includes("\\") ||
+    relativePath.startsWith("/") ||
+    relativePath.split("/").some((part) => !part || part === "." || part === "..")
+  ) {
+    throw new Error("invalid file path");
+  }
+  const target = resolve(root, relativePath);
+  if (!inside(root, target)) throw new Error("invalid file path");
+  return target;
+}
+
+function validateFiles(files) {
+  if (!Array.isArray(files) || files.length === 0 || files.length > MAX_FILES) {
+    throw new Error(`files must contain between 1 and ${MAX_FILES} items`);
+  }
+  let totalBytes = 0;
+  const validated = files.map((file) => {
+    if (!file || typeof file.path !== "string" || typeof file.content !== "string") {
+      throw new Error("each file must have a path and base64 content");
+    }
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(file.content)) {
+      throw new Error(`invalid base64 content for ${file.path}`);
+    }
+    const bytes = Buffer.from(file.content, "base64");
+    totalBytes += bytes.byteLength;
+    if (totalBytes > MAX_FILES_BYTES) throw new Error(`composition exceeds ${MAX_FILES_BYTES} bytes`);
+    return { path: file.path, bytes };
+  });
+  return validated;
+}
+
+async function localizeRendererDependencies(files) {
+  const names = ["gsap.min.js", "hyperframe.runtime.iife.js"];
+  const localized = files.map(({ path, bytes }) => {
+    if (!path.toLowerCase().endsWith(".html")) return { path, bytes };
+    const html = bytes.toString("utf8")
+      .replace(/(?:https:\/\/cdn\.jsdelivr\.net\/npm\/gsap@[^/]+\/dist\/gsap\.min\.js|\/_hyperframes\/gsap\.min\.js)/g, "assets/gsap.min.js")
+      .replace(/(?:https:\/\/cdn\.jsdelivr\.net\/npm\/@hyperframes\/core\/dist\/hyperframe\.runtime\.iife\.js|\/_hyperframes\/hyperframe\.runtime\.iife\.js)/g, "assets/hyperframe.runtime.iife.js");
+    return { path, bytes: Buffer.from(html, "utf8") };
+  });
+  const present = new Set(localized.map((file) => file.path));
+  for (const name of names) {
+    const path = `assets/${name}`;
+    if (present.has(path)) continue;
+    try {
+      const bytes = await readFile(resolve(process.cwd(), "public", "_hyperframes", name));
+      localized.push({ path, bytes });
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  return localized;
+}
+
+function readEnvPath(name, fallback) {
+  return process.env[name] || fallback;
+}
+
+async function hasValidMp4(filePath) {
+  try {
+    const details = await stat(filePath);
+    if (details.size < 12) return false;
+    const video = await open(filePath, "r");
+    const header = Buffer.alloc(12);
+    try {
+      const { bytesRead } = await video.read(header, 0, header.length, 0);
+      return bytesRead === header.length && header.subarray(4, 8).toString("ascii") === "ftyp";
+    } finally {
+      await video.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+export function createRenderManager(options = {}) {
+  const projectsDir = resolve(options.projectsDir || readEnvPath("PROJECTS_DIR", "./data/projects"));
+  const tempDir = resolve(options.tempDir || readEnvPath("RENDER_TEMP_DIR", "./data/temp"));
+  const rendersDir = resolve(options.rendersDir || readEnvPath("RENDERS_DIR", "./data/videos"));
+  const jobsFile = join(rendersDir, "jobs.json");
+  const configuredConcurrency = Number(options.concurrency || process.env.RENDER_CONCURRENCY || 1);
+  const maxConcurrent = Number.isFinite(configuredConcurrency)
+    ? Math.max(1, Math.min(4, configuredConcurrency))
+    : 1;
+  const jobs = new Map();
+  const queue = [];
+  let active = 0;
+  let saveTail = Promise.resolve();
+  let initPromise;
+
+  function persist() {
+    const snapshot = JSON.stringify([...jobs.values()], null, 2);
+    saveTail = saveTail
+      .catch(() => {})
+      .then(async () => {
+        await mkdir(rendersDir, { recursive: true });
+        const tempFile = `${jobsFile}.${randomUUID()}.tmp`;
+        await writeFile(tempFile, `${snapshot}\n`, "utf8");
+        await rename(tempFile, jobsFile);
+      });
+    return saveTail;
+  }
+
+  function pump() {
+    while (active < maxConcurrent && queue.length > 0) {
+      const id = queue.shift();
+      active += 1;
+      execute(id)
+        .catch((error) => console.error(`[render:${id}] unexpected job failure`, error))
+        .finally(() => {
+          active -= 1;
+          pump();
+        });
+    }
+  }
+
+  async function initialize() {
+    await Promise.all([
+      mkdir(projectsDir, { recursive: true }),
+      mkdir(tempDir, { recursive: true }),
+      mkdir(rendersDir, { recursive: true }),
+    ]);
+    let restored = [];
+    try {
+      restored = JSON.parse(await readFile(jobsFile, "utf8"));
+      if (!Array.isArray(restored)) restored = [];
+    } catch (error) {
+      if (error?.code !== "ENOENT") console.error("Could not read render job registry", error);
+    }
+
+    let changed = false;
+    for (const job of restored) {
+      if (!job || typeof job.id !== "string" || !/^[0-9a-f-]{36}$/i.test(job.id)) continue;
+      if (job.status === "running") {
+        job.updatedAt = new Date().toISOString();
+        if (await hasValidMp4(join(rendersDir, `${job.id}.mp4`))) {
+          job.status = "completed";
+          job.completedAt = job.updatedAt;
+          job.videoUrl = `/r/${job.id}`;
+          job.error = undefined;
+        } else {
+          job.status = "failed";
+          job.error = "Render interrupted because the server restarted before it completed.";
+        }
+        changed = true;
+      }
+      jobs.set(job.id, job);
+      if (job.status === "queued") queue.push(job.id);
+    }
+    if (changed) await persist();
+    pump();
+  }
+
+  function ready() {
+    if (!initPromise) initPromise = initialize();
+    return initPromise;
+  }
+
+  async function execute(id) {
+    await ready();
+    const job = jobs.get(id);
+    if (!job || job.status !== "queued") return;
+    job.status = "running";
+    job.updatedAt = new Date().toISOString();
+    await persist();
+
+    const workDir = join(tempDir, id);
+    const projectDir = join(projectsDir, id);
+    const outputTemp = join(workDir, "render.mp4");
+    const outputFinal = join(rendersDir, `${id}.mp4`);
+    try {
+      await mkdir(projectDir, { recursive: true });
+      await mkdir(workDir, { recursive: true });
+      const files = await localizeRendererDependencies(validateFiles(job.files));
+      await Promise.all(
+        files.map(async ({ path, bytes }) => {
+          const target = safeJoin(projectDir, path);
+          await mkdir(dirname(target), { recursive: true });
+          await writeFile(target, bytes);
+        }),
+      );
+      delete job.files;
+      await persist();
+
+      if (options.render) {
+        await options.render(projectDir, outputTemp);
+      } else {
+        await runHyperFrames(projectDir, outputTemp);
+      }
+      if (!(await hasValidMp4(outputTemp))) {
+        throw new Error("renderer output does not have a valid MP4 file signature");
+      }
+      await rename(outputTemp, outputFinal);
+      job.status = "completed";
+      job.updatedAt = new Date().toISOString();
+      job.completedAt = job.updatedAt;
+      job.videoUrl = `/r/${id}`;
+      job.error = undefined;
+    } catch (error) {
+      job.status = "failed";
+      job.updatedAt = new Date().toISOString();
+      job.error = error instanceof Error ? error.message.slice(0, MAX_ERROR_CHARS) : String(error);
+      console.error(`[render:${id}] failed`, job.error);
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+      await persist();
+    }
+  }
+
+  async function enqueue(files, source) {
+    await ready();
+    const checkedFiles = validateFiles(files);
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const job = {
+      id,
+      source,
+      status: "queued",
+      createdAt: now,
+      updatedAt: now,
+      files: checkedFiles.map(({ path, bytes }) => ({ path, content: bytes.toString("base64") })),
+    };
+    jobs.set(id, job);
+    queue.push(id);
+    await persist();
+    pump();
+    return structuredClone(job);
+  }
+
+  async function get(id) {
+    await ready();
+    const job = jobs.get(id);
+    if (!job) return null;
+    const { files: _files, ...publicJob } = job;
+    return structuredClone(publicJob);
+  }
+
+  async function listCompleted() {
+    await ready();
+    return [...jobs.values()]
+      .filter((job) => job.status === "completed")
+      .sort((left, right) => right.completedAt.localeCompare(left.completedAt))
+      .map(({ files: _files, ...job }) => ({ ...job, fileName: `${job.id}.mp4` }));
+  }
+
+  async function serveVideo(id, request) {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return new Response("not found", { status: 404 });
+    await ready();
+    const job = jobs.get(id);
+    if (!job || job.status !== "completed") return new Response("not found", { status: 404 });
+    const filePath = safeJoin(rendersDir, `${id}.mp4`);
+    let details;
+    try {
+      details = await stat(filePath);
+    } catch {
+      return new Response("not found", { status: 404 });
+    }
+    const download = new URL(request.url).searchParams.get("download") === "1";
+    const headers = new Headers({
+      "content-type": "video/mp4",
+      "accept-ranges": "bytes",
+      "cache-control": "private, max-age=0, must-revalidate",
+      "content-disposition": `${download ? "attachment" : "inline"}; filename="${id}.mp4"`,
+    });
+    const range = request.headers.get("range");
+    let start = 0;
+    let end = details.size - 1;
+    let status = 200;
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+      if (!match || (!match[1] && !match[2])) {
+        return new Response(null, { status: 416, headers: { "content-range": `bytes */${details.size}` } });
+      }
+      if (!match[1]) {
+        const suffix = Number(match[2]);
+        start = Math.max(0, details.size - suffix);
+      } else {
+        start = Number(match[1]);
+        if (match[2]) end = Math.min(end, Number(match[2]));
+      }
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= details.size) {
+        return new Response(null, { status: 416, headers: { "content-range": `bytes */${details.size}` } });
+      }
+      status = 206;
+      headers.set("content-range", `bytes ${start}-${end}/${details.size}`);
+    }
+    headers.set("content-length", String(end - start + 1));
+    const stream = createReadStream(filePath, { start, end });
+    return new Response(Readable.toWeb(stream), { status, headers });
+  }
+
+  return { enqueue, get, listCompleted, serveVideo, ready };
+}
+
+async function runHyperFrames(projectDir, outputPath) {
+  const binary = process.env.HYPERFRAMES_BIN || join(process.cwd(), "node_modules", ".bin", "hyperframes");
+  const configuredWorkers = Number(process.env.RENDER_WORKERS || 4);
+  const workers = String(Number.isFinite(configuredWorkers) ? Math.max(1, Math.min(16, configuredWorkers)) : 4);
+  const configuredTimeout = Number(process.env.RENDER_TIMEOUT_MS || DEFAULT_RENDER_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(configuredTimeout)
+    ? Math.max(30_000, configuredTimeout)
+    : DEFAULT_RENDER_TIMEOUT_MS;
+  await new Promise((resolveRun, reject) => {
+    const child = spawn(binary, ["render", projectDir, "--output", outputPath, "--workers", workers], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    const stderr = [];
+    let stderrSize = 0;
+    child.stderr.on("data", (chunk) => {
+      const bytes = Buffer.from(chunk);
+      stderr.push(bytes);
+      stderrSize += bytes.length;
+      while (stderrSize > MAX_ERROR_CHARS && stderr.length > 0) stderrSize -= stderr.shift().length;
+    });
+    let timedOut = false;
+    let killTimer;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+      killTimer.unref();
+    }, timeoutMs);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      if (timedOut) reject(new Error(`render timed out after ${timeoutMs}ms`));
+      else if (code === 0) resolveRun();
+      else reject(new Error(`hyperframes render exited with code ${code}: ${Buffer.concat(stderr).toString("utf8")}`));
+    });
+  });
+}
+
+const manager = createRenderManager();
+
+export const enqueueRender = manager.enqueue;
+export const getRenderJob = manager.get;
+export const listCompletedRenders = manager.listCompleted;
+export const serveRenderVideo = manager.serveVideo;
+export const renderJobsReady = manager.ready;

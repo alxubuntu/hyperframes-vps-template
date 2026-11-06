@@ -17,10 +17,10 @@ function Home() {
   return (
     <main>
       <header>
-        <h1>HyperFrames on Cloudflare</h1>
+        <h1>HyperFrames VPS Template</h1>
         <p>
-          HTML-based video compositions — previewed in the browser, rendered server-side in a
-          Cloudflare Container. Generation streams through TanStack AI.
+          HTML-based video compositions — previewed in the browser and rendered locally. AI
+          generation streams through TanStack AI.
         </p>
       </header>
 
@@ -28,8 +28,8 @@ function Home() {
         <AiPanel onGenerated={(result) => setGeneratedHtml(result.html)} />
       ) : (
         <div className="ai-disabled">
-          AI generation is disabled on this deployment. To enable: set{" "}
-          <code>ENABLE_AI_GEN: "true"</code> in <code>wrangler.jsonc</code> vars and redeploy.
+          AI generation is disabled. Set <code>ENABLE_AI_GEN=true</code> in your{" "}
+          <code>.env</code> file and restart the application to enable it.
         </div>
       )}
 
