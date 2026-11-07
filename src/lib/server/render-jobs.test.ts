@@ -57,6 +57,51 @@ describe("local render jobs", () => {
     expect(await readFile(join(roots.rendersDir, "jobs.json"), "utf8")).toContain(queued.id);
   });
 
+  it("stages the MP4 in the renders directory before finalizing it", async () => {
+    const roots = await makeRoots();
+    let outputPath = "";
+    const manager = createRenderManager({
+      ...roots,
+      render: async (_projectDir, path) => {
+        outputPath = path;
+        await writeFile(path, new TextEncoder().encode("0000ftypisom"));
+      },
+    });
+
+    const queued = await manager.enqueue(
+      [{ path: "index.html", content: btoa("<html/>") }],
+      "html",
+    );
+    await waitFor(() => manager.get(queued.id), (job) => job?.status === "completed");
+
+    expect(outputPath).toBe(join(roots.rendersDir, `${queued.id}.tmp.mp4`));
+    expect(await readFile(join(roots.rendersDir, `${queued.id}.mp4`), "utf8")).toBe("0000ftypisom");
+    await expect(readFile(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("cleans the staged MP4 when rendering fails", async () => {
+    const roots = await makeRoots();
+    let outputPath = "";
+    const manager = createRenderManager({
+      ...roots,
+      render: async (_projectDir, path) => {
+        outputPath = path;
+        await writeFile(path, "partial");
+        throw new Error("renderer failed");
+      },
+    });
+
+    const queued = await manager.enqueue(
+      [{ path: "index.html", content: btoa("<html/>") }],
+      "html",
+    );
+    const failed = await waitFor(() => manager.get(queued.id), (job) => job?.status === "failed");
+
+    expect(failed?.error).toContain("renderer failed");
+    await expect(readFile(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(roots.rendersDir, `${queued.id}.mp4`))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("rejects project file paths that escape the persistent projects directory", async () => {
     const roots = await makeRoots();
     const manager = createRenderManager({ ...roots, render: async () => {} });

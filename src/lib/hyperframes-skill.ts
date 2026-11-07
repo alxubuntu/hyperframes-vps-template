@@ -107,7 +107,7 @@ Your output MUST include these exact attributes — missing any one fails valida
 
 1. **Root wrapper:** \`<div class="composition" data-composition-id="main" data-width="${TARGET_WIDTH}" data-height="${TARGET_HEIGHT}" data-start="0" data-duration="X">\` where X is total duration in seconds.
 2. **Timeline registration (NOT push):** \`window.__timelines["main"] = tl;\` (object assignment, never .push()).
-3. **Local scripts in order:** `/_hyperframes/gsap.min.js` first, then `/_hyperframes/hyperframe.runtime.iife.js`.
+3. **Local scripts in order:** \`/_hyperframes/gsap.min.js\` first, then \`/_hyperframes/hyperframe.runtime.iife.js\`.
 
 ### Target canvas
 ${TARGET_WIDTH}×${TARGET_HEIGHT}. Set body and .composition to those exact pixel dimensions.

@@ -188,7 +188,9 @@ export function createRenderManager(options = {}) {
 
     const workDir = join(tempDir, id);
     const projectDir = join(projectsDir, id);
-    const outputTemp = join(workDir, "render.mp4");
+    // Stage the MP4 on the persistent video volume so the final rename stays
+    // within one filesystem even when temp and video directories are mounts.
+    const outputTemp = join(rendersDir, `${id}.tmp.mp4`);
     const outputFinal = join(rendersDir, `${id}.mp4`);
     try {
       await mkdir(projectDir, { recursive: true });
@@ -225,6 +227,7 @@ export function createRenderManager(options = {}) {
       console.error(`[render:${id}] failed`, job.error);
     } finally {
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
+      await rm(outputTemp, { force: true }).catch(() => {});
       await persist();
     }
   }
