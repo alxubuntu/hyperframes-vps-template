@@ -63,6 +63,7 @@ async function serveStatic(req, res, url) {
     return true;
   }
   const filePath = resolve(CLIENT_ROOT, `.${decodedPath}`);
+  if (filePath === CLIENT_ROOT) return false;
   if (!filePath.startsWith(`${CLIENT_ROOT}${sep}`)) {
     res.writeHead(404).end("not found");
     return true;
