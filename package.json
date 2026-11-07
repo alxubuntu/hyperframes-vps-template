@@ -42,5 +42,10 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "overrides": {
+    "@tanstack/start-plugin-core>zod": "$zod",
+    "@tanstack/router-generator>zod": "$zod",
+    "@tanstack/router-plugin>zod": "$zod"
   }
 }
