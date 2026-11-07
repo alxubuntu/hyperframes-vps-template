@@ -4,7 +4,7 @@ import { createOpenRouterText } from "@tanstack/ai-openrouter";
 
 type OpenRouterModel = Parameters<typeof createOpenRouterText>[0];
 import { SYSTEM_PROMPT_WITH_EXAMPLE, buildUserPrompt } from "../../lib/hyperframes-skill";
-import { DEFAULT_MODEL } from "../../lib/generation";
+import { resolveOpenRouterModel } from "../../lib/generation";
 import { isJsonRequest, jsonError, msg, utf8ByteLength } from "../../lib/server/assets";
 
 const MAX_PROMPT_BYTES = 8 * 1024;
@@ -76,6 +76,9 @@ export const Route = createFileRoute("/api/generate")({
         }
 
         const props = body.forwardedProps ?? {};
+        const model = resolveOpenRouterModel(props.model);
+        if (!model) return jsonError("unsupported OpenRouter model; select an allowed free model", 400);
+
         const apiKey = props.apiKey;
         if (!apiKey || typeof apiKey !== "string") {
           return jsonError("missing apiKey (your OpenRouter key)", 400);
@@ -108,12 +111,6 @@ export const Route = createFileRoute("/api/generate")({
           }
         }
 
-        // Deliberate widening: BYOK callers may pass any OpenRouter model id,
-        // not just the ones in the adapter's union. OpenRouter rejects unknown
-        // ids upstream and the error streams back to the client.
-        const model = (
-          typeof props.model === "string" ? props.model : DEFAULT_MODEL
-        ) as OpenRouterModel;
         const durationSec =
           typeof props.durationSec === "number" &&
           Number.isFinite(props.durationSec) &&
@@ -126,13 +123,13 @@ export const Route = createFileRoute("/api/generate")({
         const userTurns = messages.filter((m) => m.role === "user").length;
         const temperature = userTurns > 1 ? 0.3 : 0.7;
 
-        // The user's key is used for this one upstream call and never stored.
-        const adapter = createOpenRouterText(model, apiKey, {
-          httpReferer: request.headers.get("origin") ?? new URL(request.url).origin,
-          appTitle: "HyperFrames VPS Template",
-        });
-
         try {
+          // The validated IDs can be newer than the installed adapter's model union.
+          // The user's key is used for this one upstream call and never stored.
+          const adapter = createOpenRouterText(model as OpenRouterModel, apiKey, {
+            httpReferer: request.headers.get("origin") ?? new URL(request.url).origin,
+            appTitle: "HyperFrames VPS Template",
+          });
           const stream = chat({
             adapter,
             messages: wrapFirstUserMessage(messages, durationSec) as Parameters<

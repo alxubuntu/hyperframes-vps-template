@@ -2,9 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { useChat } from "@tanstack/ai-react";
 import {
   DEFAULT_MODEL,
+  FREE_OPENROUTER_MODELS,
   MAX_GENERATE_ATTEMPTS,
   buildFixMessage,
+  resolveOpenRouterModel,
   stripMarkdownFence,
+  type FreeOpenRouterModel,
   type LintError,
 } from "../lib/generation";
 import { lintComposition } from "../lib/server-fns";
@@ -22,6 +25,13 @@ import { consumeOAuthCallback, startOpenRouterLogin } from "../lib/openrouter-oa
 interface Hint {
   className: string;
   text: string;
+}
+
+interface GenerationRun {
+  apiKey: string;
+  model: FreeOpenRouterModel;
+  attempts: number;
+  startedAt: number;
 }
 
 export interface GenerationResult {
@@ -52,14 +62,13 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
   const [apiKey, setApiKey] = useState("");
   const [oauthConnected, setOauthConnected] = useState(false);
   const [showManualKey, setShowManualKey] = useState(false);
+  const [model, setModel] = useState<FreeOpenRouterModel>(DEFAULT_MODEL);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [hint, setHint] = useState<Hint | null>(null);
 
-  // onFinish runs from the stream callback — refs keep it in sync without
-  // re-creating the chat client mid-generation.
-  const apiKeyRef = useRef("");
-  const attemptsRef = useRef(1);
-  const startedAtRef = useRef(0);
+  // Keep the model and key fixed for the initial request and all lint retries.
+  const runRef = useRef<GenerationRun | null>(null);
 
   // Returning from the OpenRouter consent page: exchange the one-time code
   // for a runtime key. The exchange is memoized in openrouter-oauth.ts, so a
@@ -96,15 +105,20 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
 
   function handleDisconnect() {
     setApiKey("");
-    apiKeyRef.current = "";
     setOauthConnected(false);
     setHint(null);
   }
 
-  // Custom fetcher instead of a connection adapter so each request carries
-  // the current BYOK key (adapter `body` is fixed at client creation).
+  function finishGeneration() {
+    runRef.current = null;
+    setIsGenerating(false);
+  }
+
+  // A custom fetcher reads the current generation without recreating the client.
   const { messages, sendMessage, isLoading, error, clear } = useChat({
     fetcher: async ({ messages: history, threadId, runId }, { signal }) => {
+      const run = runRef.current;
+      if (!run) throw new Error("No active generation.");
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -112,7 +126,7 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
           messages: history,
           threadId,
           runId,
-          forwardedProps: { apiKey: apiKeyRef.current },
+          forwardedProps: { apiKey: run.apiKey, model: run.model },
         }),
         signal,
       });
@@ -130,6 +144,7 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
       }
       return res;
     },
+    onError: finishGeneration,
     onFinish: (message) => {
       const html = stripMarkdownFence(
         message.parts
@@ -142,8 +157,11 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
   });
 
   async function handleAssistantTurn(html: string) {
+    const run = runRef.current;
+    if (!run) return;
     if (!html) {
       setHint({ className: "hint error", text: "The model returned no HTML. Try again." });
+      finishGeneration();
       return;
     }
 
@@ -152,42 +170,47 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
     try {
       ({ errors } = await lintComposition({ data: { html } }));
     } catch (err) {
+      if (runRef.current !== run) return;
       console.error("lint server fn failed:", err);
       setHint({
         className: "hint warn",
-        text: "Validation unavailable — skipping self-heal. Preview anyway; render may fail.",
+        text: `Validation unavailable (model: ${run.model}) — skipping self-heal. Preview anyway; render may fail.`,
       });
-      onGenerated({ html, attempts: attemptsRef.current, lintErrors: [] });
+      finishGeneration();
+      onGenerated({ html, attempts: run.attempts, lintErrors: [] });
       return;
     }
+    if (runRef.current !== run) return;
 
-    if (errors.length > 0 && attemptsRef.current < MAX_GENERATE_ATTEMPTS) {
-      attemptsRef.current += 1;
+    if (errors.length > 0 && run.attempts < MAX_GENERATE_ATTEMPTS) {
+      run.attempts += 1;
       setHint({
         className: "hint",
-        text: `Lint found ${errors.length} error${errors.length > 1 ? "s" : ""} — self-healing (attempt ${attemptsRef.current}/${MAX_GENERATE_ATTEMPTS})…`,
+        text: `Lint found ${errors.length} error${errors.length > 1 ? "s" : ""} — self-healing (attempt ${run.attempts}/${MAX_GENERATE_ATTEMPTS})…`,
       });
       void sendMessage(buildFixMessage(errors));
       return;
     }
 
-    const secs = ((Date.now() - startedAtRef.current) / 1000).toFixed(1);
-    const attempts = attemptsRef.current;
+    const secs = ((Date.now() - run.startedAt) / 1000).toFixed(1);
+    const { attempts } = run;
     if (errors.length === 0) {
       setHint({
         className: "hint",
-        text: `Done in ${secs}s (${attempts} pass${attempts > 1 ? "es" : ""}, model: ${DEFAULT_MODEL}). Click "Render MP4" to capture.`,
+        text: `Done in ${secs}s (${attempts} pass${attempts > 1 ? "es" : ""}, model: ${run.model}). Click "Render MP4" to capture.`,
       });
     } else {
       setHint({
         className: "hint warn",
-        text: `Generated with ${errors.length} lint error${errors.length > 1 ? "s" : ""} after ${attempts} attempts. Preview anyway — render may fail.`,
+        text: `Generated with ${errors.length} lint error${errors.length > 1 ? "s" : ""} after ${attempts} attempts (model: ${run.model}). Preview anyway — render may fail.`,
       });
     }
+    finishGeneration();
     onGenerated({ html, attempts, lintErrors: errors });
   }
 
   function handleGenerate() {
+    if (runRef.current) return;
     const key = apiKey.trim();
     const p = prompt.trim();
     if (!key) {
@@ -198,9 +221,8 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
       setHint({ className: "hint error", text: "Add a prompt describing the video." });
       return;
     }
-    apiKeyRef.current = key;
-    attemptsRef.current = 1;
-    startedAtRef.current = Date.now();
+    runRef.current = { apiKey: key, model, attempts: 1, startedAt: Date.now() };
+    setIsGenerating(true);
     setHint({ className: "hint", text: "Generating composition — streaming…" });
     clear();
     void sendMessage(p);
@@ -241,13 +263,13 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
         {oauthConnected ? (
           <div className="ai-actions">
             <p className="hint">✓ Connected to OpenRouter</p>
-            <button type="button" onClick={handleDisconnect}>
+            <button type="button" onClick={handleDisconnect} disabled={isGenerating}>
               Disconnect
             </button>
           </div>
         ) : (
           <div className="ai-actions">
-            <button type="button" onClick={handleLogin}>
+            <button type="button" onClick={handleLogin} disabled={isGenerating}>
               Log in with OpenRouter
             </button>
             <button type="button" className="link-btn" onClick={() => setShowManualKey((v) => !v)}>
@@ -272,6 +294,27 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
             />
           </div>
         )}
+
+        <div>
+          <label htmlFor="openrouter-model">
+            <span className="lbl-detail">OpenRouter model</span>
+          </label>
+          <select
+            id="openrouter-model"
+            value={model}
+            disabled={isGenerating}
+            onChange={(event) => {
+              const selected = resolveOpenRouterModel(event.currentTarget.value);
+              if (selected) setModel(selected);
+            }}
+          >
+            {FREE_OPENROUTER_MODELS.map(({ id, label }) => (
+              <option key={id} value={id}>
+                {label} (Free)
+              </option>
+            ))}
+          </select>
+        </div>
 
         <div>
           <label htmlFor="prompt">
@@ -300,7 +343,7 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
         </div>
 
         <div className="ai-actions">
-          <button onClick={handleGenerate} disabled={isLoading}>
+          <button onClick={handleGenerate} disabled={isGenerating}>
             Generate composition
           </button>
           {hintText && <p className={hintText.className}>{hintText.text}</p>}

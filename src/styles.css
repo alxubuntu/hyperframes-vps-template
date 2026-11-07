@@ -169,6 +169,7 @@ details.ai-panel summary .badge {
 }
 .ai-body input[type="password"],
 .ai-body input[type="text"],
+.ai-body select,
 .ai-body textarea {
   width: 100%;
   background: var(--bg);
@@ -185,6 +186,7 @@ details.ai-panel summary .badge {
   font-family: inherit;
 }
 .ai-body input:focus,
+.ai-body select:focus,
 .ai-body textarea:focus {
   outline: none;
   border-color: var(--accent);

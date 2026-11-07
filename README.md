@@ -70,6 +70,11 @@ Copy `.env.example` to `.env` and edit the values before the first run:
 
 AI generation uses the existing OpenRouter BYOK flow. The user supplies an OpenRouter key in the UI; it is used for that request and is not stored by this application. When AI is enabled, requests to OpenRouter are an optional external dependency; previewing and rendering the bundled composition do not depend on it.
 
+Choose a free OpenRouter model above the prompt. The app uses it for the full generation, including lint retries.
+`POST /api/generate` accepts the same choices in `forwardedProps.model`; omitting it selects NVIDIA Nemotron 3.5 Super
+VL (Free). If your OpenRouter policy or provider blocks the selected model, the request fails rather than switching
+to another model.
+
 ## Reverse proxy example
 
 Configure Nginx or Traefik to forward the public site to `http://127.0.0.1:3000`. For Nginx, allow the custom HTML body limit and disable buffering so AI Server-Sent Events stream through:
