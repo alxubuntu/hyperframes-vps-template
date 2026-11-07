@@ -167,7 +167,7 @@ Pick a mood before writing: dark/premium, neon/electric, warm/editorial, clean/c
 ---
 
 ## Runtime assets
-- Load GSAP and the HyperFrames runtime from the local `/_hyperframes/` paths shown in the skeleton.
+- Load GSAP and the HyperFrames runtime from the local \`/_hyperframes/\` paths shown in the skeleton.
 
 ## Forbidden
 - No external images, videos, or other CDN resources.
