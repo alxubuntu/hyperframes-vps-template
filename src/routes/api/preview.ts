@@ -10,7 +10,7 @@ const PREVIEW_HEADERS = {
 export const Route = createFileRoute("/api/preview")({
   server: {
     handlers: {
-      GET: async ({ request }) => {
+      GET: async () => {
         const res = await fetchAsset("_bundled/preview.html");
         if (!res.ok) {
           return new Response("preview bundle missing — run build", { status: 500 });

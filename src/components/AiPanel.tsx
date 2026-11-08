@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useChat } from "@tanstack/ai-react";
 import {
-  DEFAULT_MODEL,
-  FREE_OPENROUTER_MODELS,
   MAX_GENERATE_ATTEMPTS,
   buildFixMessage,
-  resolveOpenRouterModel,
   stripMarkdownFence,
-  type FreeOpenRouterModel,
   type LintError,
 } from "../lib/generation";
-import { lintComposition } from "../lib/server-fns";
+import { pickDefaultModel, type SelectableOpenRouterModel } from "../lib/openrouter-models";
+import { lintComposition, listOpenRouterModels } from "../lib/server-fns";
 import { consumeOAuthCallback, startOpenRouterLogin } from "../lib/openrouter-oauth";
+import { ModelPicker } from "./ModelPicker";
 
 // The BYOK key is deliberately kept in React state only — never in
 // sessionStorage/localStorage. Generated compositions execute in the player's
@@ -29,7 +27,7 @@ interface Hint {
 
 interface GenerationRun {
   apiKey: string;
-  model: FreeOpenRouterModel;
+  model: string;
   attempts: number;
   startedAt: number;
 }
@@ -62,7 +60,14 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
   const [apiKey, setApiKey] = useState("");
   const [oauthConnected, setOauthConnected] = useState(false);
   const [showManualKey, setShowManualKey] = useState(false);
-  const [model, setModel] = useState<FreeOpenRouterModel>(DEFAULT_MODEL);
+  const [models, setModels] = useState<SelectableOpenRouterModel[]>([]);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [catalogStatus, setCatalogStatus] = useState<"idle" | "loading" | "ready" | "error">(
+    "idle",
+  );
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [freeOnly, setFreeOnly] = useState(true);
+  const [reloadToken, setReloadToken] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [hint, setHint] = useState<Hint | null>(null);
@@ -98,6 +103,63 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
     };
   }, []);
 
+  // Load the live catalog once a key is available. The catalog itself is
+  // public, so the key never leaves the browser for this request; it only acts
+  // as the user's signal that they are ready to choose a model.
+  useEffect(() => {
+    const key = apiKey.trim();
+    if (!key) {
+      setModels([]);
+      setSelectedModel("");
+      setCatalogStatus("idle");
+      setCatalogError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setCatalogStatus("loading");
+    setCatalogError(null);
+    const timer = setTimeout(() => {
+      void listOpenRouterModels()
+        .then((result) => {
+          if (cancelled) return;
+          if (result.ok) {
+            setModels(result.models);
+            setCatalogStatus("ready");
+            return;
+          }
+          setModels([]);
+          setCatalogStatus("error");
+          setCatalogError(result.error);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setModels([]);
+          setCatalogStatus("error");
+          setCatalogError(
+            err instanceof Error ? err.message : "Could not load OpenRouter's model list.",
+          );
+        });
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [apiKey, reloadToken]);
+
+  // Keep the selection valid when the catalog is refreshed or the model is
+  // delisted; never silently flip to a paid model.
+  useEffect(() => {
+    if (models.length === 0) return;
+    setSelectedModel((current) => {
+      const currentModel = models.find((model) => model.id === current);
+      if (currentModel && (!freeOnly || currentModel.free)) return current;
+      const candidates = freeOnly ? models.filter((model) => model.free) : models;
+      return pickDefaultModel(candidates) ?? "";
+    });
+  }, [models, freeOnly]);
+
   function handleLogin() {
     setHint({ className: "hint", text: "Redirecting to OpenRouter…" });
     void startOpenRouterLogin();
@@ -106,6 +168,10 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
   function handleDisconnect() {
     setApiKey("");
     setOauthConnected(false);
+    setModels([]);
+    setSelectedModel("");
+    setCatalogStatus("idle");
+    setCatalogError(null);
     setHint(null);
   }
 
@@ -217,11 +283,18 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
       setHint({ className: "hint error", text: "Log in with OpenRouter (or paste a key) first." });
       return;
     }
+    if (!selectedModel) {
+      setHint({
+        className: "hint error",
+        text: "Load the model list and select an OpenRouter model first.",
+      });
+      return;
+    }
     if (!p) {
       setHint({ className: "hint error", text: "Add a prompt describing the video." });
       return;
     }
-    runRef.current = { apiKey: key, model, attempts: 1, startedAt: Date.now() };
+    runRef.current = { apiKey: key, model: selectedModel, attempts: 1, startedAt: Date.now() };
     setIsGenerating(true);
     setHint({ className: "hint", text: "Generating composition — streaming…" });
     clear();
@@ -255,9 +328,11 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
           <strong>Your key is forwarded once to OpenRouter per request and discarded</strong> — this
           worker does not log, persist, or cache it. In the browser it is held in memory for this
           tab only and cleared on reload — but generated compositions run with same-origin access in
-          the preview, so treat the key as reachable by generated code.{" "}
+          the preview, so treat the key as reachable by generated code. Loading the model list asks
+          this app's server for OpenRouter's public catalog; your key is not sent with that request.{" "}
           <strong>Use a spend-capped key and revoke it when done</strong> — that cap, not where the
-          key is stored, is what limits your exposure.
+          key is stored, is what limits your exposure. Paid models are selected only after you
+          uncheck <em>Free only</em>, and their usage is billed to your key.
         </p>
 
         {oauthConnected ? (
@@ -296,24 +371,28 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
         )}
 
         <div>
-          <label htmlFor="openrouter-model">
+          <label htmlFor="openrouter-model-search">
             <span className="lbl-detail">OpenRouter model</span>
           </label>
-          <select
-            id="openrouter-model"
-            value={model}
-            disabled={isGenerating}
-            onChange={(event) => {
-              const selected = resolveOpenRouterModel(event.currentTarget.value);
-              if (selected) setModel(selected);
-            }}
-          >
-            {FREE_OPENROUTER_MODELS.map(({ id, label }) => (
-              <option key={id} value={id}>
-                {label} (Free)
-              </option>
-            ))}
-          </select>
+          {apiKey.trim() ? (
+            <ModelPicker
+              inputId="openrouter-model-search"
+              models={models}
+              value={selectedModel}
+              onSelect={setSelectedModel}
+              freeOnly={freeOnly}
+              onFreeOnlyChange={setFreeOnly}
+              disabled={isGenerating}
+              loading={catalogStatus === "loading"}
+              error={catalogStatus === "error" ? catalogError : null}
+              onRetry={() => setReloadToken((value) => value + 1)}
+            />
+          ) : (
+            <p className="model-locked">Enter your key to load the available models.</p>
+          )}
+          {catalogStatus === "ready" && models.length === 0 && (
+            <p className="model-empty">OpenRouter returned no text models.</p>
+          )}
         </div>
 
         <div>
@@ -343,7 +422,7 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
         </div>
 
         <div className="ai-actions">
-          <button onClick={handleGenerate} disabled={isGenerating}>
+          <button onClick={handleGenerate} disabled={isGenerating || !selectedModel}>
             Generate composition
           </button>
           {hintText && <p className={hintText.className}>{hintText.text}</p>}

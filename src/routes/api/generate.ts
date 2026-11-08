@@ -4,7 +4,10 @@ import { createOpenRouterText } from "@tanstack/ai-openrouter";
 
 type OpenRouterModel = Parameters<typeof createOpenRouterText>[0];
 import { SYSTEM_PROMPT_WITH_EXAMPLE, buildUserPrompt } from "../../lib/hyperframes-skill";
-import { resolveOpenRouterModel } from "../../lib/generation";
+import {
+  InvalidOpenRouterModelError,
+  resolveRequestedModel,
+} from "../../lib/server/openrouter-catalog";
 import { isJsonRequest, jsonError, msg, utf8ByteLength } from "../../lib/server/assets";
 
 const MAX_PROMPT_BYTES = 8 * 1024;
@@ -76,15 +79,22 @@ export const Route = createFileRoute("/api/generate")({
         }
 
         const props = body.forwardedProps ?? {};
-        const model = resolveOpenRouterModel(props.model);
-        if (!model) return jsonError("unsupported OpenRouter model; select an allowed free model", 400);
-
         const apiKey = props.apiKey;
         if (!apiKey || typeof apiKey !== "string") {
           return jsonError("missing apiKey (your OpenRouter key)", 400);
         }
         if (apiKey.length > MAX_KEY_BYTES) {
           return jsonError("apiKey too long", 400);
+        }
+
+        let model: string;
+        try {
+          model = await resolveRequestedModel(props.model);
+        } catch (err) {
+          if (err instanceof InvalidOpenRouterModelError) {
+            return jsonError(err.message, 400);
+          }
+          return jsonError("could not resolve an OpenRouter model", 400);
         }
 
         const messages = body.messages;

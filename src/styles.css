@@ -169,7 +169,6 @@ details.ai-panel summary .badge {
 }
 .ai-body input[type="password"],
 .ai-body input[type="text"],
-.ai-body select,
 .ai-body textarea {
   width: 100%;
   background: var(--bg);
@@ -186,7 +185,6 @@ details.ai-panel summary .badge {
   font-family: inherit;
 }
 .ai-body input:focus,
-.ai-body select:focus,
 .ai-body textarea:focus {
   outline: none;
   border-color: var(--accent);
@@ -250,6 +248,109 @@ details.ai-panel summary .badge {
   background: var(--bg);
   padding: 1px 5px;
   border-radius: 3px;
+}
+/* Model picker */
+.model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.model-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.model-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.model-toggle input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.model-results {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+.model-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.model-option:last-child {
+  border-bottom: 0;
+}
+.model-option:hover,
+.model-option.active {
+  background: var(--panel);
+}
+.model-option[aria-selected="true"] {
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+}
+.model-option-name {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+}
+.model-option-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.model-option-price {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.model-free {
+  color: var(--accent);
+  font-weight: 600;
+}
+.model-status,
+.model-empty,
+.model-more,
+.model-locked,
+.model-error,
+.model-selected {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.model-error {
+  color: #ff7878;
+}
+.model-selected strong {
+  color: var(--fg);
+}
+.model-selected code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 .ai-disabled {
   margin: 24px 0 0;

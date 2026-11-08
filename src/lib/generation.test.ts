@@ -1,47 +1,143 @@
-import { describe, expect, it } from "vitest";
-import { buildFixMessage, stripMarkdownFence } from "./generation";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpenRouterText } from "@tanstack/ai-openrouter";
+import { chat, toServerSentEventsResponse } from "@tanstack/ai";
+import type { SelectableOpenRouterModel } from "./openrouter-models";
+import { Route } from "../routes/api/generate";
 
-describe("stripMarkdownFence", () => {
-  const html = "<!DOCTYPE html>\n<html><body>hi</body></html>";
-
-  it("returns unfenced text unchanged", () => {
-    expect(stripMarkdownFence(html)).toBe(html);
-  });
-
-  it("strips a ```html fence", () => {
-    expect(stripMarkdownFence("```html\n" + html + "\n```")).toBe(html);
-  });
-
-  it("strips a bare ``` fence", () => {
-    expect(stripMarkdownFence("```\n" + html + "\n```")).toBe(html);
-  });
-
-  it("strips an opening fence with no closing fence", () => {
-    expect(stripMarkdownFence("```html\n" + html)).toBe(html);
-  });
-
-  it("strips a closing fence with no opening fence", () => {
-    expect(stripMarkdownFence(html + "\n```")).toBe(html);
-  });
-
-  it("trims surrounding whitespace", () => {
-    expect(stripMarkdownFence("\n\n  ```html\n" + html + "\n```  \n")).toBe(html);
-  });
-
-  it("handles empty input", () => {
-    expect(stripMarkdownFence("")).toBe("");
-    expect(stripMarkdownFence("```\n```")).toBe("");
-  });
+vi.mock("@tanstack/react-router", () => ({
+  createFileRoute: () => (options: unknown) => ({ options }),
+}));
+vi.mock("@tanstack/ai-openrouter", () => ({ createOpenRouterText: vi.fn() }));
+vi.mock("@tanstack/ai", () => ({ chat: vi.fn(), toServerSentEventsResponse: vi.fn() }));
+vi.mock("./server/openrouter-catalog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server/openrouter-catalog")>();
+  return { ...actual, resolveRequestedModel: vi.fn() };
 });
 
-describe("buildFixMessage", () => {
-  it("numbers each lint error with its code", () => {
-    const msg = buildFixMessage([
-      { code: "missing-doctype", message: "no doctype" },
-      { code: "bad-clip", message: "clip missing data-duration" },
-    ]);
-    expect(msg).toContain("1. [missing-doctype] no doctype");
-    expect(msg).toContain("2. [bad-clip] clip missing data-duration");
-    expect(msg).toContain("Return ONLY the fixed HTML");
+import { InvalidOpenRouterModelError, resolveRequestedModel } from "./server/openrouter-catalog";
+
+const MODELS: SelectableOpenRouterModel[] = [
+  {
+    id: "test/free-model:free",
+    name: "Free Model",
+    free: true,
+    promptPricePerMillion: 0,
+    completionPricePerMillion: 0,
+    contextLength: 128000,
+  },
+  {
+    id: "test/paid-model",
+    name: "Paid Model",
+    free: false,
+    promptPricePerMillion: 1,
+    completionPricePerMillion: 2,
+    contextLength: 128000,
+  },
+];
+
+const { POST } = (
+  Route as unknown as {
+    options: { server: { handlers: { POST: (args: { request: Request }) => Promise<Response> } } };
+  }
+).options.server.handlers;
+
+function generate(model?: unknown) {
+  return POST({
+    request: new Request("https://example.test/api/generate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Make a video" }],
+        forwardedProps: { apiKey: "test-key", model },
+      }),
+    }),
+  });
+}
+
+describe("OpenRouter model policy", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.stubEnv("ENABLE_AI_GEN", "true");
+    vi.mocked(toServerSentEventsResponse).mockReturnValue(new Response("stream"));
+    vi.mocked(resolveRequestedModel).mockImplementation(async (value: unknown) => {
+      if (value === undefined) return MODELS[0].id;
+      if (typeof value !== "string" || !MODELS.some((model) => model.id === value)) {
+        throw new InvalidOpenRouterModelError("unsupported test model");
+      }
+      return value;
+    });
+  });
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("uses the first free catalog model when a legacy request omits the model", async () => {
+    expect((await generate()).status).toBe(200);
+    expect(createOpenRouterText).toHaveBeenCalledExactlyOnceWith(
+      "test/free-model:free",
+      "test-key",
+      expect.any(Object),
+    );
+  });
+
+  it.each(MODELS)("uses $id when requested", async ({ id }) => {
+    expect((await generate(id)).status).toBe(200);
+    expect(createOpenRouterText).toHaveBeenCalledExactlyOnceWith(
+      id,
+      "test-key",
+      expect.any(Object),
+    );
+  });
+
+  it.each([
+    "test/unknown",
+    "google/gemini-3-flash-preview",
+    "unlisted/model:free",
+    "openrouter/free",
+    "",
+    null,
+    42,
+  ])(
+    "rejects an unsupported or malformed model (%s) before creating the adapter",
+    async (model) => {
+      expect((await generate(model)).status).toBe(400);
+      expect(createOpenRouterText).not.toHaveBeenCalled();
+      expect(chat).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a valid explicit model usable when the catalog is unreachable", async () => {
+    vi.mocked(resolveRequestedModel).mockImplementation(async (value: unknown) => {
+      if (typeof value === "string" && value.includes("/")) return value;
+      throw new InvalidOpenRouterModelError("model is required");
+    });
+
+    expect((await generate("test/paid-model")).status).toBe(200);
+    expect(createOpenRouterText).toHaveBeenCalledExactlyOnceWith(
+      "test/paid-model",
+      "test-key",
+      expect.any(Object),
+    );
+
+    vi.mocked(createOpenRouterText).mockClear();
+    expect((await generate()).status).toBe(400);
+    expect(createOpenRouterText).not.toHaveBeenCalled();
+  });
+
+  it("does not switch models on a provider error", async () => {
+    vi.mocked(createOpenRouterText).mockImplementation(() => {
+      throw new Error("Model unavailable");
+    });
+
+    const response = await generate(MODELS[1].id);
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining("Model unavailable"),
+    });
+    expect(createOpenRouterText).toHaveBeenCalledExactlyOnceWith(
+      MODELS[1].id,
+      "test-key",
+      expect.any(Object),
+    );
   });
 });

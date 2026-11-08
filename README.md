@@ -70,10 +70,16 @@ Copy `.env.example` to `.env` and edit the values before the first run:
 
 AI generation uses the existing OpenRouter BYOK flow. The user supplies an OpenRouter key in the UI; it is used for that request and is not stored by this application. When AI is enabled, requests to OpenRouter are an optional external dependency; previewing and rendering the bundled composition do not depend on it.
 
-Choose a free OpenRouter model above the prompt. The app uses it for the full generation, including lint retries.
-`POST /api/generate` accepts the same choices in `forwardedProps.model`; omitting it selects NVIDIA Nemotron 3.5 Super
-VL (Free). If your OpenRouter policy or provider blocks the selected model, the request fails rather than switching
-to another model.
+After you enter a key, the app loads OpenRouter's live text-model catalog and lets you search it above the prompt.
+"Free only" is on by default; uncheck it to see paid models, which display an indicative per-million-token price and
+are billed to your OpenRouter key. The catalog is fetched by this app's server from OpenRouter's public
+`/api/v1/models` endpoint, cached for five minutes, and never includes your key. Loading the catalog after a key entry
+is a UI signal only: the endpoint itself is public.
+
+`POST /api/generate` accepts any text model id from that catalog in `forwardedProps.model`. Omitting it selects the
+first free model in the catalog; if the catalog is unreachable, an explicit well-formed model id is still accepted so
+a catalog outage does not block generation. Unknown ids are rejected. If your OpenRouter policy or provider blocks the
+selected model, the request fails rather than switching to another model.
 
 ## Reverse proxy example
 
@@ -163,7 +169,7 @@ The bundled sample composition retains its original Cloudflare-themed creative c
 
 - The render queue is process-local and intended for one Compose replica. There is no distributed queue or cross-process locking.
 - A render actively running during a container restart is not resumed automatically; its job is marked failed. Completed videos and queued job payloads persist.
-- AI generation still calls OpenRouter when enabled. Disable it with `ENABLE_AI_GEN=false` if you require no outbound AI API use.
+- AI generation still calls OpenRouter when enabled. The model picker also fetches OpenRouter's public model catalog (cached for five minutes). Disable AI generation with `ENABLE_AI_GEN=false` if you require no outbound AI API use.
 - Custom HTML can still explicitly request its own external fonts, images, or scripts; those user-authored URLs are not mirrored by the template.
 - Existing videos held in a previous Cloudflare R2 bucket are not imported automatically; old R2 URLs do not resolve through the local `/r/<id>` route. Export any videos you need separately before switching links.
 - No authentication is added. Use a trusted private network or add protection at your reverse proxy before exposing the application.
