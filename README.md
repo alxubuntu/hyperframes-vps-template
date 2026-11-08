@@ -30,13 +30,16 @@ From the repository directory:
 ```bash
 cp .env.example .env
 mkdir -p data/projects data/temp data/videos
-# The image runs as UID/GID 1000 (`node`); make the bind mounts writable.
+# Optional but recommended: pre-create the bind mounts with the right owner.
+# The init-data Compose service repairs them automatically on every start.
 sudo chown -R 1000:1000 data
 docker compose build
 docker compose up -d --wait
 docker compose ps
 curl -fsS http://127.0.0.1:3000/healthz
 ```
+
+The `init-data` service runs before the app and gives the three `data/` bind mounts to UID/GID 1000, which is the user the application runs as. The Dockerfile also changes ownership of HyperFrames' browser and font cache to that user, because the render CLI creates those files during the image build.
 
 Open the application through your reverse proxy. The Compose port is bound to `127.0.0.1` by default so the Node service is not exposed directly to the public Internet. Change `WEB_PORT` in `.env` to choose another loopback port.
 

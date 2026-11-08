@@ -1,4 +1,23 @@
 services:
+  # Docker creates missing bind-mount directories as root. The app runs as
+  # UID 1000 (node), so repair ownership on every compose start before the app
+  # can try to persist jobs or renders.
+  init-data:
+    image: busybox:1.36.1
+    user: "0:0"
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /data/projects /data/temp /data/videos
+        chown -R 1000:1000 /data
+        chmod -R u+rwX /data
+    volumes:
+      - ./data/projects:/data/projects
+      - ./data/temp:/data/temp
+      - ./data/videos:/data/videos
+
   hyperframes:
     build:
       context: .
@@ -22,6 +41,9 @@ services:
       - ./data/projects:/data/projects
       - ./data/temp:/data/temp
       - ./data/videos:/data/videos
+    depends_on:
+      init-data:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD

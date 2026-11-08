@@ -63,7 +63,10 @@ COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/public ./public
 COPY --from=build --chown=node:node /app/server.mjs ./server.mjs
 COPY --from=build --chown=node:node /app/src/composition-manifest.json ./src/composition-manifest.json
-RUN /app/renderer/node_modules/.bin/hyperframes browser ensure
+# The CLI writes fonts and browser assets under the node user's cache. It runs
+# as root during the build, so hand those files back before switching USER.
+RUN /app/renderer/node_modules/.bin/hyperframes browser ensure \
+    && chown -R node:node /home/node/.cache
 
 USER node
 EXPOSE 3000
