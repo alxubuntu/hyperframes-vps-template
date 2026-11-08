@@ -115,24 +115,24 @@ describe("getOpenRouterCatalog", () => {
   });
 });
 
-describe("resolveRequestedModel", () => {
+describe("resolveOpenRouterModel", () => {
   it("accepts a known model and defaults to the first free one", async () => {
     const mod = await loadModule();
     fetchMock.mockResolvedValue(catalogResponse());
 
-    await expect(mod.resolveRequestedModel("vendor/paid-model")).resolves.toBe("vendor/paid-model");
-    await expect(mod.resolveRequestedModel(undefined)).resolves.toBe("vendor/free-model:free");
+    await expect(mod.resolveOpenRouterModel("vendor/paid-model")).resolves.toBe("vendor/paid-model");
+    await expect(mod.resolveOpenRouterModel(undefined)).resolves.toBe("vendor/free-model:free");
   });
 
   it("rejects unknown and malformed ids when the catalog is available", async () => {
     const mod = await loadModule();
     fetchMock.mockResolvedValue(catalogResponse());
 
-    await expect(mod.resolveRequestedModel("vendor/unknown")).rejects.toBeInstanceOf(
+    await expect(mod.resolveOpenRouterModel("vendor/unknown")).rejects.toBeInstanceOf(
       mod.InvalidOpenRouterModelError,
     );
     for (const value of [null, "", "no-slash", 42, "vendor/space model"]) {
-      await expect(mod.resolveRequestedModel(value)).rejects.toBeInstanceOf(
+      await expect(mod.resolveOpenRouterModel(value)).rejects.toBeInstanceOf(
         mod.InvalidOpenRouterModelError,
       );
     }
@@ -142,10 +142,10 @@ describe("resolveRequestedModel", () => {
     const mod = await loadModule();
     fetchMock.mockRejectedValue(new Error("offline"));
 
-    await expect(mod.resolveRequestedModel("~vendor/paid-model:free")).resolves.toBe(
+    await expect(mod.resolveOpenRouterModel("~vendor/paid-model:free")).resolves.toBe(
       "~vendor/paid-model:free",
     );
-    await expect(mod.resolveRequestedModel(undefined)).rejects.toBeInstanceOf(
+    await expect(mod.resolveOpenRouterModel(undefined)).rejects.toBeInstanceOf(
       mod.InvalidOpenRouterModelError,
     );
   });

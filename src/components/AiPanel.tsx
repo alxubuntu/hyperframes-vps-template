@@ -6,8 +6,9 @@ import {
   stripMarkdownFence,
   type LintError,
 } from "../lib/generation";
-import { pickDefaultModel, type SelectableOpenRouterModel } from "../lib/openrouter-models";
-import { lintComposition, listOpenRouterModels } from "../lib/server-fns";
+import { pickDefaultModel, type SelectableModel } from "../lib/models";
+import { PROVIDER_IDS, PROVIDERS, type ProviderId } from "../lib/providers";
+import { lintComposition, listModels } from "../lib/server-fns";
 import { consumeOAuthCallback, startOpenRouterLogin } from "../lib/openrouter-oauth";
 import { ModelPicker } from "./ModelPicker";
 
@@ -17,8 +18,8 @@ import { ModelPicker } from "./ModelPicker";
 // getItem() away from model-generated code. Note this is a bar-raiser, not an
 // isolation boundary: same-origin code can still reach window.parent and dig
 // the key out of React state or intercept the next request. The real
-// blast-radius control is the spend-capped, revocable OAuth key. (The OAuth
-// PKCE verifier briefly uses sessionStorage across the login redirect — see
+// blast-radius control is the spend-capped, revocable key. (The OAuth PKCE
+// verifier briefly uses sessionStorage across the login redirect — see
 // openrouter-oauth.ts for why that's safe.)
 interface Hint {
   className: string;
@@ -28,6 +29,7 @@ interface Hint {
 interface GenerationRun {
   apiKey: string;
   model: string;
+  provider: ProviderId;
   attempts: number;
   startedAt: number;
 }
@@ -57,10 +59,11 @@ const EXAMPLE_PROMPTS: Array<{ label: string; prompt: string }> = [
 ];
 
 export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResult) => void }) {
-  const [apiKey, setApiKey] = useState("");
+  const [provider, setProvider] = useState<ProviderId>("openrouter");
+  const [keys, setKeys] = useState<Record<ProviderId, string>>({ openrouter: "", deepseek: "" });
   const [oauthConnected, setOauthConnected] = useState(false);
   const [showManualKey, setShowManualKey] = useState(false);
-  const [models, setModels] = useState<SelectableOpenRouterModel[]>([]);
+  const [models, setModels] = useState<SelectableModel[]>([]);
   const [selectedModel, setSelectedModel] = useState("");
   const [catalogStatus, setCatalogStatus] = useState<"idle" | "loading" | "ready" | "error">(
     "idle",
@@ -72,8 +75,15 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
   const [prompt, setPrompt] = useState("");
   const [hint, setHint] = useState<Hint | null>(null);
 
+  const providerInfo = PROVIDERS[provider];
+  const apiKey = keys[provider];
+
   // Keep the model and key fixed for the initial request and all lint retries.
   const runRef = useRef<GenerationRun | null>(null);
+
+  function updateApiKey(value: string) {
+    setKeys((current) => ({ ...current, [provider]: value }));
+  }
 
   // Returning from the OpenRouter consent page: exchange the one-time code
   // for a runtime key. The exchange is memoized in openrouter-oauth.ts, so a
@@ -84,7 +94,8 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
     consumeOAuthCallback()
       .then((key) => {
         if (cancelled || !key) return;
-        setApiKey(key);
+        setKeys((current) => ({ ...current, openrouter: key }));
+        setProvider("openrouter");
         setOauthConnected(true);
         setHint({
           className: "hint",
@@ -103,9 +114,9 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
     };
   }, []);
 
-  // Load the live catalog once a key is available. The catalog itself is
-  // public, so the key never leaves the browser for this request; it only acts
-  // as the user's signal that they are ready to choose a model.
+  // Load the selected provider's catalog once a key is available. OpenRouter's
+  // catalog is public, so its key never leaves the browser for that request;
+  // DeepSeek's listing requires auth, so its key is forwarded for that call.
   useEffect(() => {
     const key = apiKey.trim();
     if (!key) {
@@ -120,7 +131,7 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
     setCatalogStatus("loading");
     setCatalogError(null);
     const timer = setTimeout(() => {
-      void listOpenRouterModels()
+      void listModels({ data: { provider, apiKey: key } })
         .then((result) => {
           if (cancelled) return;
           if (result.ok) {
@@ -137,7 +148,9 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
           setModels([]);
           setCatalogStatus("error");
           setCatalogError(
-            err instanceof Error ? err.message : "Could not load OpenRouter's model list.",
+            err instanceof Error
+              ? err.message
+              : `Could not load ${providerInfo.label}'s model list.`,
           );
         });
     }, 400);
@@ -146,19 +159,34 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [apiKey, reloadToken]);
+  }, [apiKey, provider, providerInfo.label, reloadToken]);
 
   // Keep the selection valid when the catalog is refreshed or the model is
-  // delisted; never silently flip to a paid model.
+  // delisted; never silently flip to a paid model when a free one exists.
   useEffect(() => {
     if (models.length === 0) return;
     setSelectedModel((current) => {
       const currentModel = models.find((model) => model.id === current);
-      if (currentModel && (!freeOnly || currentModel.free)) return current;
-      const candidates = freeOnly ? models.filter((model) => model.free) : models;
-      return pickDefaultModel(candidates) ?? "";
+      if (currentModel && (!freeOnly || currentModel.free || !providerInfo.hasFreeModels)) {
+        return current;
+      }
+      const candidates =
+        freeOnly && providerInfo.hasFreeModels ? models.filter((model) => model.free) : models;
+      return pickDefaultModel(candidates, providerInfo.defaultModelId) ?? "";
     });
-  }, [models, freeOnly]);
+  }, [models, freeOnly, providerInfo.defaultModelId, providerInfo.hasFreeModels]);
+
+  function handleProviderChange(next: ProviderId) {
+    if (next === provider) return;
+    setProvider(next);
+    setModels([]);
+    setSelectedModel("");
+    setCatalogStatus("idle");
+    setCatalogError(null);
+    setFreeOnly(PROVIDERS[next].hasFreeModels);
+    setShowManualKey(false);
+    setHint(null);
+  }
 
   function handleLogin() {
     setHint({ className: "hint", text: "Redirecting to OpenRouter…" });
@@ -166,7 +194,7 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
   }
 
   function handleDisconnect() {
-    setApiKey("");
+    setKeys((current) => ({ ...current, openrouter: "" }));
     setOauthConnected(false);
     setModels([]);
     setSelectedModel("");
@@ -192,7 +220,11 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
           messages: history,
           threadId,
           runId,
-          forwardedProps: { apiKey: run.apiKey, model: run.model },
+          forwardedProps: {
+            apiKey: run.apiKey,
+            model: run.model,
+            provider: run.provider,
+          },
         }),
         signal,
       });
@@ -280,13 +312,19 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
     const key = apiKey.trim();
     const p = prompt.trim();
     if (!key) {
-      setHint({ className: "hint error", text: "Log in with OpenRouter (or paste a key) first." });
+      setHint({
+        className: "hint error",
+        text:
+          provider === "openrouter"
+            ? "Log in with OpenRouter (or paste a key) first."
+            : `Enter your ${providerInfo.label} API key first.`,
+      });
       return;
     }
     if (!selectedModel) {
       setHint({
         className: "hint error",
-        text: "Load the model list and select an OpenRouter model first.",
+        text: `Load the model list and select a ${providerInfo.label} model first.`,
       });
       return;
     }
@@ -294,7 +332,7 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
       setHint({ className: "hint error", text: "Add a prompt describing the video." });
       return;
     }
-    runRef.current = { apiKey: key, model: selectedModel, attempts: 1, startedAt: Date.now() };
+    runRef.current = { apiKey: key, model: selectedModel, provider, attempts: 1, startedAt: Date.now() };
     setIsGenerating(true);
     setHint({ className: "hint", text: "Generating composition — streaming…" });
     clear();
@@ -318,65 +356,117 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
         <span className="badge">BYOK</span>
       </summary>
       <div className="ai-body">
-        <p className="security-note">
-          Log in with{" "}
-          <a href="https://openrouter.ai" target="_blank" rel="noopener noreferrer">
-            OpenRouter
-          </a>{" "}
-          to mint a key scoped to this app — you can revoke it anytime from your OpenRouter
-          dashboard.{" "}
-          <strong>Your key is forwarded once to OpenRouter per request and discarded</strong> — this
-          worker does not log, persist, or cache it. In the browser it is held in memory for this
-          tab only and cleared on reload — but generated compositions run with same-origin access in
-          the preview, so treat the key as reachable by generated code. Loading the model list asks
-          this app's server for OpenRouter's public catalog; your key is not sent with that request.{" "}
-          <strong>Use a spend-capped key and revoke it when done</strong> — that cap, not where the
-          key is stored, is what limits your exposure. Paid models are selected only after you
-          uncheck <em>Free only</em>, and their usage is billed to your key.
-        </p>
+        <div className="provider-tabs" role="group" aria-label="AI provider">
+          {PROVIDER_IDS.map((id) => (
+            <button
+              key={id}
+              type="button"
+              className={`provider-tab${id === provider ? " active" : ""}`}
+              aria-pressed={id === provider}
+              onClick={() => handleProviderChange(id)}
+              disabled={isGenerating}
+            >
+              {PROVIDERS[id].label}
+            </button>
+          ))}
+        </div>
 
-        {oauthConnected ? (
-          <div className="ai-actions">
-            <p className="hint">✓ Connected to OpenRouter</p>
-            <button type="button" onClick={handleDisconnect} disabled={isGenerating}>
-              Disconnect
-            </button>
-          </div>
+        {provider === "deepseek" ? (
+          <p className="security-note">
+            Generate with{" "}
+            <a href="https://platform.deepseek.com" target="_blank" rel="noopener noreferrer">
+              DeepSeek
+            </a>{" "}
+            by pasting an API key from{" "}
+            <a
+              href={providerInfo.keyUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              platform.deepseek.com
+            </a>
+            .{" "}
+            <strong>Your key is forwarded only to {providerInfo.apiHost} and discarded</strong> — this
+            server does not log, persist, or cache it. The key is sent to this app&apos;s server for
+            each generation and for the model list, because DeepSeek requires authentication to
+            list models. In the browser it is held in memory for this tab only and cleared on
+            reload — but generated compositions run with same-origin access in the preview, so
+            treat the key as reachable by generated code.{" "}
+            <strong>Use a spend-limited key and revoke it when done</strong>. DeepSeek has no free
+            tier: usage is billed to your key and the picker does not show per-token prices.
+          </p>
         ) : (
-          <div className="ai-actions">
-            <button type="button" onClick={handleLogin} disabled={isGenerating}>
-              Log in with OpenRouter
-            </button>
-            <button type="button" className="link-btn" onClick={() => setShowManualKey((v) => !v)}>
-              {showManualKey ? "Hide manual key entry" : "…or paste an API key instead"}
-            </button>
-          </div>
+          <p className="security-note">
+            Log in with{" "}
+            <a href="https://openrouter.ai" target="_blank" rel="noopener noreferrer">
+              OpenRouter
+            </a>{" "}
+            to mint a key scoped to this app — you can revoke it anytime from your OpenRouter
+            dashboard.{" "}
+            <strong>Your key is forwarded once to OpenRouter per request and discarded</strong> —
+            this worker does not log, persist, or cache it. In the browser it is held in memory for
+            this tab only and cleared on reload — but generated compositions run with same-origin
+            access in the preview, so treat the key as reachable by generated code. Loading the
+            model list asks this app&apos;s server for OpenRouter&apos;s public catalog; your key is
+            not sent with that request.{" "}
+            <strong>Use a spend-capped key and revoke it when done</strong> — that cap, not where the
+            key is stored, is what limits your exposure. Paid models are selected only after you
+            uncheck <em>Free only</em>, and their usage is billed to your key.
+          </p>
         )}
 
-        {!oauthConnected && showManualKey && (
+        {providerInfo.supportsOAuth &&
+          (oauthConnected ? (
+            <div className="ai-actions">
+              <p className="hint">✓ Connected to OpenRouter</p>
+              <button type="button" onClick={handleDisconnect} disabled={isGenerating}>
+                Disconnect
+              </button>
+            </div>
+          ) : (
+            <div className="ai-actions">
+              <button type="button" onClick={handleLogin} disabled={isGenerating}>
+                Log in with OpenRouter
+              </button>
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => setShowManualKey((v) => !v)}
+              >
+                {showManualKey ? "Hide manual key entry" : "…or paste an API key instead"}
+              </button>
+            </div>
+          ))}
+
+        {(!providerInfo.supportsOAuth || (showManualKey && !oauthConnected)) && (
           <div>
             <label htmlFor="api-key">
-              <span className="lbl-detail">OpenRouter API key</span>
+              <span className="lbl-detail">{providerInfo.label} API key</span>{" "}
+              <a href={providerInfo.keyUrl} target="_blank" rel="noopener noreferrer">
+                Get a key
+              </a>
             </label>
             <input
               id="api-key"
               type="password"
               autoComplete="off"
               spellCheck={false}
-              placeholder="sk-or-v1-..."
+              placeholder={providerInfo.keyPlaceholder}
               value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              onChange={(e) => updateApiKey(e.target.value)}
             />
           </div>
         )}
 
         <div>
-          <label htmlFor="openrouter-model-search">
-            <span className="lbl-detail">OpenRouter model</span>
+          <label htmlFor="model-search">
+            <span className="lbl-detail">{providerInfo.label} model</span>
           </label>
           {apiKey.trim() ? (
             <ModelPicker
-              inputId="openrouter-model-search"
+              inputId="model-search"
+              providerLabel={providerInfo.label}
+              showFreeOnly={providerInfo.hasFreeModels}
               models={models}
               value={selectedModel}
               onSelect={setSelectedModel}
@@ -388,10 +478,12 @@ export function AiPanel({ onGenerated }: { onGenerated: (result: GenerationResul
               onRetry={() => setReloadToken((value) => value + 1)}
             />
           ) : (
-            <p className="model-locked">Enter your key to load the available models.</p>
+            <p className="model-locked">
+              Enter your {providerInfo.label} key to load the available models.
+            </p>
           )}
           {catalogStatus === "ready" && models.length === 0 && (
-            <p className="model-empty">OpenRouter returned no text models.</p>
+            <p className="model-empty">{providerInfo.label} returned no text models.</p>
           )}
         </div>
 

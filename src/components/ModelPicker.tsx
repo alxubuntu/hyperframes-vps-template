@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import {
-  filterOpenRouterModels,
-  formatModelPrice,
-  type SelectableOpenRouterModel,
-} from "../lib/openrouter-models";
+import { filterModels, formatModelPrice, type SelectableModel } from "../lib/models";
 
 const MAX_VISIBLE_RESULTS = 50;
 
 export interface ModelPickerProps {
   inputId: string;
-  models: SelectableOpenRouterModel[];
+  models: SelectableModel[];
+  /** Provider display name, used in labels and status copy. */
+  providerLabel: string;
+  /** Hide the free-only filter for providers without a free tier. */
+  showFreeOnly?: boolean;
   value: string;
   onSelect: (id: string) => void;
   freeOnly: boolean;
@@ -23,6 +23,8 @@ export interface ModelPickerProps {
 export function ModelPicker({
   inputId,
   models,
+  providerLabel,
+  showFreeOnly = true,
   value,
   onSelect,
   freeOnly,
@@ -38,8 +40,8 @@ export function ModelPicker({
   const rootRef = useRef<HTMLDivElement>(null);
 
   const matching = useMemo(
-    () => filterOpenRouterModels(models, { freeOnly, query }),
-    [models, freeOnly, query],
+    () => filterModels(models, { freeOnly: showFreeOnly && freeOnly, query }),
+    [models, freeOnly, query, showFreeOnly],
   );
   const visible = matching.slice(0, MAX_VISIBLE_RESULTS);
   const selected = models.find((model) => model.id === value);
@@ -123,15 +125,17 @@ export function ModelPicker({
         <span>
           {matching.length} model{matching.length === 1 ? "" : "s"}
         </span>
-        <label className="model-toggle">
-          <input
-            type="checkbox"
-            checked={freeOnly}
-            disabled={disabled || loading}
-            onChange={(event) => onFreeOnlyChange(event.currentTarget.checked)}
-          />
-          Free only
-        </label>
+        {showFreeOnly && (
+          <label className="model-toggle">
+            <input
+              type="checkbox"
+              checked={freeOnly}
+              disabled={disabled || loading}
+              onChange={(event) => onFreeOnlyChange(event.currentTarget.checked)}
+            />
+            Free only
+          </label>
+        )}
       </div>
 
       <input
@@ -157,7 +161,7 @@ export function ModelPicker({
 
       {loading && (
         <p className="model-status" role="status">
-          Loading models from OpenRouter…
+          Loading models from {providerLabel}…
         </p>
       )}
 
@@ -179,7 +183,7 @@ export function ModelPicker({
               className="model-results"
               id={listId}
               role="listbox"
-              aria-label="OpenRouter models"
+              aria-label={`${providerLabel} models`}
             >
               {visible.map((model, index) => (
                 <div
@@ -204,7 +208,7 @@ export function ModelPicker({
             </div>
           ) : (
             <p className="model-empty">
-              {freeOnly
+              {showFreeOnly && freeOnly
                 ? "No free models match. Uncheck “Free only” to include paid models."
                 : "No models match your search."}
             </p>

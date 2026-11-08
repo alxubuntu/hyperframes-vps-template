@@ -1,8 +1,4 @@
-import {
-  parseOpenRouterCatalog,
-  pickDefaultModel,
-  type SelectableOpenRouterModel,
-} from "../openrouter-models";
+import { parseOpenRouterCatalog, pickDefaultModel, type SelectableModel } from "../models";
 
 export const CATALOG_URL = "https://openrouter.ai/api/v1/models";
 export const CATALOG_TTL_MS = 5 * 60 * 1000;
@@ -14,14 +10,14 @@ export class OpenRouterCatalogError extends Error {}
 export class InvalidOpenRouterModelError extends Error {}
 
 interface CatalogCache {
-  models: SelectableOpenRouterModel[];
+  models: SelectableModel[];
   fetchedAt: number;
 }
 
 let cache: CatalogCache | null = null;
-let inFlight: Promise<SelectableOpenRouterModel[]> | null = null;
+let inFlight: Promise<SelectableModel[]> | null = null;
 
-async function fetchOpenRouterCatalog(): Promise<SelectableOpenRouterModel[]> {
+async function fetchOpenRouterCatalog(): Promise<SelectableModel[]> {
   let response: Response;
   try {
     response = await fetch(CATALOG_URL, {
@@ -56,7 +52,7 @@ async function fetchOpenRouterCatalog(): Promise<SelectableOpenRouterModel[]> {
  * for five minutes; a failed refresh keeps serving the last good catalog so a
  * transient network error does not empty the picker.
  */
-export function getOpenRouterCatalog(): Promise<SelectableOpenRouterModel[]> {
+export function getOpenRouterCatalog(): Promise<SelectableModel[]> {
   if (cache && Date.now() - cache.fetchedAt < CATALOG_TTL_MS) {
     return Promise.resolve(cache.models);
   }
@@ -93,8 +89,8 @@ function isValidModelId(value: string): boolean {
  * must be a known text model; when it is not, a syntactically valid id is
  * allowed through so an upstream catalog outage does not break generation.
  */
-export async function resolveRequestedModel(value: unknown): Promise<string> {
-  let models: SelectableOpenRouterModel[] | null = null;
+export async function resolveOpenRouterModel(value: unknown): Promise<string> {
+  let models: SelectableModel[] | null = null;
   try {
     models = await getOpenRouterCatalog();
   } catch {

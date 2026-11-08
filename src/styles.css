@@ -238,6 +238,33 @@ details.ai-panel summary .badge {
   line-height: 1.5;
   margin: 0;
 }
+.provider-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: fit-content;
+}
+.provider-tab {
+  background: none;
+  color: var(--muted);
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+}
+.provider-tab:hover:not(:disabled):not(.active) {
+  color: var(--fg);
+}
+.provider-tab.active {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.provider-tab:disabled {
+  cursor: progress;
+}
 .security-note strong {
   color: var(--fg);
 }

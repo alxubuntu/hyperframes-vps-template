@@ -1,18 +1,22 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { chat, toServerSentEventsResponse } from "@tanstack/ai";
+import { chat, toServerSentEventsResponse, type AnyTextAdapter } from "@tanstack/ai";
 import { createOpenRouterText } from "@tanstack/ai-openrouter";
+import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
 
 type OpenRouterModel = Parameters<typeof createOpenRouterText>[0];
 import { SYSTEM_PROMPT_WITH_EXAMPLE, buildUserPrompt } from "../../lib/hyperframes-skill";
-import {
-  InvalidOpenRouterModelError,
-  resolveRequestedModel,
-} from "../../lib/server/openrouter-catalog";
+import { InvalidModelError, resolveRequestedModel } from "../../lib/server/model-catalog";
+import { DEEPSEEK_BASE_URL } from "../../lib/server/deepseek-catalog";
+import { isProviderId, PROVIDERS, type ProviderId } from "../../lib/providers";
 import { isJsonRequest, jsonError, msg, utf8ByteLength } from "../../lib/server/assets";
 
 const MAX_PROMPT_BYTES = 8 * 1024;
 const MAX_KEY_BYTES = 1024;
 const MAX_OUTPUT_TOKENS = 16000;
+// DeepSeek streams `reasoning_content` before the answer when thinking is on.
+// The composition prompt is already prescriptive, so thinking is disabled for
+// predictable latency and cost; flip this to "enabled" to opt back in.
+const DEEPSEEK_THINKING = { type: "disabled" } as const;
 // durationSec is only a prompt hint, but an absurd value could steer the
 // model toward a very long composition that inflates render time/cost.
 const MAX_DURATION_SEC = 120;
@@ -22,6 +26,7 @@ interface GenerateRequestBody {
   forwardedProps?: {
     apiKey?: unknown;
     model?: unknown;
+    provider?: unknown;
     durationSec?: unknown;
   };
 }
@@ -56,6 +61,27 @@ function wrapFirstUserMessage(
   });
 }
 
+function createAdapter(
+  provider: ProviderId,
+  model: string,
+  apiKey: string,
+  origin: string,
+): AnyTextAdapter {
+  if (provider === "deepseek") {
+    return openaiCompatibleText(model, {
+      name: "deepseek",
+      baseURL: DEEPSEEK_BASE_URL,
+      apiKey,
+      api: "chat-completions",
+    }) as AnyTextAdapter;
+  }
+
+  return createOpenRouterText(model as OpenRouterModel, apiKey, {
+    httpReferer: origin,
+    appTitle: "HyperFrames VPS Template",
+  }) as AnyTextAdapter;
+}
+
 export const Route = createFileRoute("/api/generate")({
   server: {
     handlers: {
@@ -79,9 +105,14 @@ export const Route = createFileRoute("/api/generate")({
         }
 
         const props = body.forwardedProps ?? {};
+        const provider = props.provider === undefined ? "openrouter" : props.provider;
+        if (!isProviderId(provider)) {
+          return jsonError("unsupported provider", 400);
+        }
+
         const apiKey = props.apiKey;
         if (!apiKey || typeof apiKey !== "string") {
-          return jsonError("missing apiKey (your OpenRouter key)", 400);
+          return jsonError(`missing apiKey (your ${PROVIDERS[provider].label} key)`, 400);
         }
         if (apiKey.length > MAX_KEY_BYTES) {
           return jsonError("apiKey too long", 400);
@@ -89,12 +120,12 @@ export const Route = createFileRoute("/api/generate")({
 
         let model: string;
         try {
-          model = await resolveRequestedModel(props.model);
+          model = await resolveRequestedModel(provider, props.model, { apiKey });
         } catch (err) {
-          if (err instanceof InvalidOpenRouterModelError) {
+          if (err instanceof InvalidModelError) {
             return jsonError(err.message, 400);
           }
-          return jsonError("could not resolve an OpenRouter model", 400);
+          return jsonError(`could not resolve a ${PROVIDERS[provider].label} model`, 400);
         }
 
         const messages = body.messages;
@@ -136,20 +167,30 @@ export const Route = createFileRoute("/api/generate")({
         try {
           // The validated IDs can be newer than the installed adapter's model union.
           // The user's key is used for this one upstream call and never stored.
-          const adapter = createOpenRouterText(model as OpenRouterModel, apiKey, {
-            httpReferer: request.headers.get("origin") ?? new URL(request.url).origin,
-            appTitle: "HyperFrames VPS Template",
-          });
+          const adapter = createAdapter(
+            provider,
+            model,
+            apiKey,
+            request.headers.get("origin") ?? new URL(request.url).origin,
+          );
+          // The OpenAI-compatible adapter spreads modelOptions straight into the
+          // request body, so DeepSeek needs its snake_case field name there.
+          const modelOptions =
+            provider === "deepseek"
+              ? {
+                  temperature,
+                  max_tokens: MAX_OUTPUT_TOKENS,
+                  thinking: DEEPSEEK_THINKING,
+                }
+              : { temperature, maxCompletionTokens: MAX_OUTPUT_TOKENS };
+
           const stream = chat({
             adapter,
             messages: wrapFirstUserMessage(messages, durationSec) as Parameters<
               typeof chat
             >[0]["messages"],
             systemPrompts: [SYSTEM_PROMPT_WITH_EXAMPLE],
-            modelOptions: {
-              temperature,
-              maxCompletionTokens: MAX_OUTPUT_TOKENS,
-            },
+            modelOptions,
           });
 
           return toServerSentEventsResponse(stream);

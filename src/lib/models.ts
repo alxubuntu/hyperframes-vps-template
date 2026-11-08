@@ -1,12 +1,17 @@
-export interface SelectableOpenRouterModel {
+import type { ProviderId } from "./providers";
+
+export interface SelectableModel {
+  provider: ProviderId;
   id: string;
   name: string;
   free: boolean;
-  /** USD per 1M prompt tokens, or null when OpenRouter does not report it. */
+  /** USD per 1M prompt tokens, or null when the provider does not report it. */
   promptPricePerMillion: number | null;
-  /** USD per 1M completion tokens, or null when OpenRouter does not report it. */
+  /** USD per 1M completion tokens, or null when the provider does not report it. */
   completionPricePerMillion: number | null;
   contextLength: number | null;
+  /** Maximum output tokens the provider allows, when reported. */
+  maxOutputTokens: number | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -47,14 +52,18 @@ function positiveInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
 }
 
+function byNameThenId(a: SelectableModel, b: SelectableModel): number {
+  return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+}
+
 /**
  * Shape OpenRouter's /api/v1/models payload into the small surface the UI
  * needs. Entries that cannot produce text are dropped: they would only fail
  * the generation request later.
  */
-export function parseOpenRouterCatalog(payload: unknown): SelectableOpenRouterModel[] {
+export function parseOpenRouterCatalog(payload: unknown): SelectableModel[] {
   const models = isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
-  const byId = new Map<string, SelectableOpenRouterModel>();
+  const byId = new Map<string, SelectableModel>();
 
   for (const entry of models) {
     if (!isRecord(entry)) continue;
@@ -68,25 +77,59 @@ export function parseOpenRouterCatalog(payload: unknown): SelectableOpenRouterMo
     if (byId.has(id)) continue;
 
     byId.set(id, {
+      provider: "openrouter",
       id,
       name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : id,
       free: prompt === 0 && completion === 0,
       promptPricePerMillion: pricePerMillion(pricing.prompt),
       completionPricePerMillion: pricePerMillion(pricing.completion),
       contextLength: positiveInteger(entry.context_length),
+      maxOutputTokens: null,
     });
   }
 
-  return [...byId.values()].sort(
-    (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
-  );
+  return [...byId.values()].sort(byNameThenId);
+}
+
+/**
+ * Shape DeepSeek's /models payload. Every entry is billed per token, so no
+ * prices are reported; the metadata that does exist (context window, output
+ * limit) is kept for the picker. Output modalities are only filtered when the
+ * provider states them.
+ */
+export function parseDeepSeekCatalog(payload: unknown): SelectableModel[] {
+  const models = isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
+  const byId = new Map<string, SelectableModel>();
+
+  for (const entry of models) {
+    if (!isRecord(entry)) continue;
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    if (!id || byId.has(id)) continue;
+    if (Array.isArray(entry.output_modalities) && !entry.output_modalities.includes("text")) {
+      continue;
+    }
+
+    byId.set(id, {
+      provider: "deepseek",
+      id,
+      name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : id,
+      free: false,
+      promptPricePerMillion: null,
+      completionPricePerMillion: null,
+      contextLength: positiveInteger(entry.context_window),
+      maxOutputTokens: positiveInteger(entry.max_output_tokens),
+    });
+  }
+
+  // Id order keeps DeepSeek's short list deterministic across catalog refreshes.
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /** Client-side narrowing of an already parsed catalog. */
-export function filterOpenRouterModels(
-  models: SelectableOpenRouterModel[],
+export function filterModels(
+  models: SelectableModel[],
   options: { freeOnly?: boolean; query?: string } = {},
-): SelectableOpenRouterModel[] {
+): SelectableModel[] {
   const tokens = (options.query ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
 
   return models.filter((model) => {
@@ -103,7 +146,7 @@ function formatPerMillion(value: number): string {
 }
 
 /** Human-readable pricing for the picker; informational, not a billing guarantee. */
-export function formatModelPrice(model: SelectableOpenRouterModel): string {
+export function formatModelPrice(model: SelectableModel): string {
   if (model.free) return "Free";
   const parts: string[] = [];
   if (model.promptPricePerMillion !== null) {
@@ -112,10 +155,21 @@ export function formatModelPrice(model: SelectableOpenRouterModel): string {
   if (model.completionPricePerMillion !== null) {
     parts.push(`$${formatPerMillion(model.completionPricePerMillion)}/M out`);
   }
-  return parts.length > 0 ? parts.join(" · ") : "Price unavailable";
+  if (parts.length > 0) return parts.join(" · ");
+  return model.provider === "deepseek" ? "Billed per token" : "Price unavailable";
 }
 
-/** Prefer a free model so a reload never silently selects a paid one. */
-export function pickDefaultModel(models: SelectableOpenRouterModel[]): string | undefined {
+/**
+ * Prefer the provider's documented default, then a free model, so a reload
+ * never silently selects a paid model when a free one exists.
+ */
+export function pickDefaultModel(
+  models: SelectableModel[],
+  preferredId?: string,
+): string | undefined {
+  if (preferredId) {
+    const preferred = models.find((model) => model.id === preferredId);
+    if (preferred) return preferred.id;
+  }
   return models.find((model) => model.free)?.id ?? models[0]?.id;
 }

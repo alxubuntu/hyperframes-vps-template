@@ -71,18 +71,14 @@ Copy `.env.example` to `.env` and edit the values before the first run:
 | `RENDER_TIMEOUT_MS` | `600000` | Maximum time allowed for one render before it is terminated. |
 | `TRUST_PROXY_HEADERS` | `false` | Set `true` only when a trusted reverse proxy overwrites forwarded host/protocol headers. |
 
-AI generation uses the existing OpenRouter BYOK flow. The user supplies an OpenRouter key in the UI; it is used for that request and is not stored by this application. When AI is enabled, requests to OpenRouter are an optional external dependency; previewing and rendering the bundled composition do not depend on it.
+AI generation is BYOK and supports two providers: OpenRouter and DeepSeek. The user supplies the key in the UI; it is used for that request and is not stored by this application. When AI is enabled, requests to the selected provider are an optional external dependency; previewing and rendering the bundled composition do not depend on them.
 
-After you enter a key, the app loads OpenRouter's live text-model catalog and lets you search it above the prompt.
-"Free only" is on by default; uncheck it to see paid models, which display an indicative per-million-token price and
-are billed to your OpenRouter key. The catalog is fetched by this app's server from OpenRouter's public
-`/api/v1/models` endpoint, cached for five minutes, and never includes your key. Loading the catalog after a key entry
-is a UI signal only: the endpoint itself is public.
+Choose the provider above the key field:
 
-`POST /api/generate` accepts any text model id from that catalog in `forwardedProps.model`. Omitting it selects the
-first free model in the catalog; if the catalog is unreachable, an explicit well-formed model id is still accepted so
-a catalog outage does not block generation. Unknown ids are rejected. If your OpenRouter policy or provider blocks the
-selected model, the request fails rather than switching to another model.
+- **OpenRouter** — log in with OpenRouter (PKCE, spend-capped key) or paste a key. Entering a key loads OpenRouter's live text-model catalog, fetched by this app's server from the public `/api/v1/models` endpoint, cached for five minutes, and never includes your key. "Free only" is on by default; uncheck it to see paid models, which display an indicative per-million-token price and are billed to your OpenRouter key.
+- **DeepSeek** — paste a key from `platform.deepseek.com`. The catalog comes from DeepSeek's authenticated `/models` endpoint, so the key is sent to this app's server for that one call and then to `api.deepseek.com`; it is not logged, persisted, or cached. DeepSeek has no free tier, so the picker hides "Free only" and shows "Billed per token" instead of prices.
+
+`POST /api/generate` takes `forwardedProps.provider` (`openrouter` or `deepseek`; omitted means `openrouter` for backward compatibility) plus `forwardedProps.model`. Omitting the model selects the provider default — the first free OpenRouter model, or `deepseek-flash` for DeepSeek. If a catalog is unreachable, an explicit well-formed model id is still accepted so an outage does not block generation. Unknown ids and ids from the other provider are rejected. If the provider blocks the selected model, the request fails rather than switching to another model or provider.
 
 ## Reverse proxy example
 
@@ -166,13 +162,14 @@ npm run build
 | Cloudflare `ASSETS` binding | Read-only local `public/` filesystem access for composition and preview assets. |
 | `wrangler.jsonc`, generated Worker types, Wrangler scripts, and Cloudflare container source | Removed; Docker Compose is the production deployment and healthcheck path. |
 
-The bundled sample composition retains its original Cloudflare-themed creative content and folder name (`cloudflare-intro`); that is sample video content only, not an infrastructure dependency. HyperFrames, React, TanStack Start/AI, the browser preview, OAuth integration, OpenRouter BYOK generation, and the player are retained.
+The bundled sample composition retains its original Cloudflare-themed creative content and folder name (`cloudflare-intro`); that is sample video content only, not an infrastructure dependency. HyperFrames, React, TanStack Start/AI, the browser preview, OAuth integration, OpenRouter and DeepSeek BYOK generation, and the player are retained.
 
 ## Known limits
 
 - The render queue is process-local and intended for one Compose replica. There is no distributed queue or cross-process locking.
 - A render actively running during a container restart is not resumed automatically; its job is marked failed. Completed videos and queued job payloads persist.
-- AI generation still calls OpenRouter when enabled. The model picker also fetches OpenRouter's public model catalog (cached for five minutes). Disable AI generation with `ENABLE_AI_GEN=false` if you require no outbound AI API use.
+- AI generation calls OpenRouter or DeepSeek when enabled, depending on the provider selected in the UI. The model picker fetches OpenRouter's public catalog or DeepSeek's authenticated catalog (both cached for five minutes). Disable AI generation with `ENABLE_AI_GEN=false` if you require no outbound AI API use.
+- The DeepSeek catalog cache is per process and not keyed per user: the model list is account-independent, so a successful fetch is shared, while a rejected key is still reported on the next refresh or generation.
 - Custom HTML can still explicitly request its own external fonts, images, or scripts; those user-authored URLs are not mirrored by the template.
 - Existing videos held in a previous Cloudflare R2 bucket are not imported automatically; old R2 URLs do not resolve through the local `/r/<id>` route. Export any videos you need separately before switching links.
 - No authentication is added. Use a trusted private network or add protection at your reverse proxy before exposing the application.
