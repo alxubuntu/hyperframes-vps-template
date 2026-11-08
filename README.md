@@ -109,13 +109,15 @@ docker compose build
 docker compose up -d --wait
 ```
 
-Update after bringing the desired repository revision onto the VPS:
+Update a VPS deployment in place (pull the revision, rebuild the image, restart):
 
 ```bash
+git pull
 docker compose build --pull
 docker compose up -d --wait
-docker compose ps
 ```
+
+`--pull` refreshes the base images; the dependency layer still rebuilds when `package.json` or `bun.lock` change. `--wait` returns only after the container passes its `/healthz` check; `docker compose ps` shows the result.
 
 This replaces the application container but keeps all three bind-mounted `data/` directories. Back them up before changing hosts or rebuilding storage. A basic backup can be made while the app is stopped:
 
