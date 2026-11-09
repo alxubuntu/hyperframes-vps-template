@@ -16,6 +16,7 @@ import { Route as ApiRenderRouteImport } from './routes/api/render'
 import { Route as ApiRenderStatusRouteImport } from './routes/api/render-status'
 import { Route as ApiRendersRouteImport } from './routes/api/renders'
 import { Route as RSplatRouteImport } from './routes/r.$'
+import { Route as ApiRenderSchemaRouteImport } from './routes/api/render.schema'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -52,49 +53,81 @@ const RSplatRoute = RSplatRouteImport.update({
   path: '/r/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiRenderSchemaRoute = ApiRenderSchemaRouteImport.update({
+  id: '/schema',
+  path: '/schema',
+  getParentRoute: () => ApiRenderRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/generate': typeof ApiGenerateRoute
   '/api/preview': typeof ApiPreviewRoute
-  '/api/render': typeof ApiRenderRoute
+  '/api/render': typeof ApiRenderRouteWithChildren
   '/api/render-status': typeof ApiRenderStatusRoute
   '/api/renders': typeof ApiRendersRoute
   '/r/$': typeof RSplatRoute
+  '/api/render/schema': typeof ApiRenderSchemaRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/generate': typeof ApiGenerateRoute
   '/api/preview': typeof ApiPreviewRoute
-  '/api/render': typeof ApiRenderRoute
+  '/api/render': typeof ApiRenderRouteWithChildren
   '/api/render-status': typeof ApiRenderStatusRoute
   '/api/renders': typeof ApiRendersRoute
   '/r/$': typeof RSplatRoute
+  '/api/render/schema': typeof ApiRenderSchemaRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/generate': typeof ApiGenerateRoute
   '/api/preview': typeof ApiPreviewRoute
-  '/api/render': typeof ApiRenderRoute
+  '/api/render': typeof ApiRenderRouteWithChildren
   '/api/render-status': typeof ApiRenderStatusRoute
   '/api/renders': typeof ApiRendersRoute
   '/r/$': typeof RSplatRoute
+  '/api/render/schema': typeof ApiRenderSchemaRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/generate' | '/api/preview' | '/api/render' | '/api/render-status' | '/api/renders' | '/r/$'
+  fullPaths:
+    | '/'
+    | '/api/generate'
+    | '/api/preview'
+    | '/api/render'
+    | '/api/render-status'
+    | '/api/renders'
+    | '/r/$'
+    | '/api/render/schema'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/generate' | '/api/preview' | '/api/render' | '/api/render-status' | '/api/renders' | '/r/$'
+  to:
+    | '/'
+    | '/api/generate'
+    | '/api/preview'
+    | '/api/render'
+    | '/api/render-status'
+    | '/api/renders'
+    | '/r/$'
+    | '/api/render/schema'
   id:
-    '__root__' | '/' | '/api/generate' | '/api/preview' | '/api/render' | '/api/render-status' | '/api/renders' | '/r/$'
+    | '__root__'
+    | '/'
+    | '/api/generate'
+    | '/api/preview'
+    | '/api/render'
+    | '/api/render-status'
+    | '/api/renders'
+    | '/r/$'
+    | '/api/render/schema'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiGenerateRoute: typeof ApiGenerateRoute
   ApiPreviewRoute: typeof ApiPreviewRoute
-  ApiRenderRoute: typeof ApiRenderRoute
+  ApiRenderRoute: typeof ApiRenderRouteWithChildren
   ApiRenderStatusRoute: typeof ApiRenderStatusRoute
   ApiRendersRoute: typeof ApiRendersRoute
   RSplatRoute: typeof RSplatRoute
@@ -151,14 +184,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/render/schema': {
+      id: '/api/render/schema'
+      path: '/schema'
+      fullPath: '/api/render/schema'
+      preLoaderRoute: typeof ApiRenderSchemaRouteImport
+      parentRoute: typeof ApiRenderRoute
+    }
   }
 }
+
+interface ApiRenderRouteChildren {
+  ApiRenderSchemaRoute: typeof ApiRenderSchemaRoute
+}
+
+const ApiRenderRouteChildren: ApiRenderRouteChildren = {
+  ApiRenderSchemaRoute: ApiRenderSchemaRoute,
+}
+
+const ApiRenderRouteWithChildren = ApiRenderRoute._addFileChildren(
+  ApiRenderRouteChildren,
+)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiGenerateRoute: ApiGenerateRoute,
   ApiPreviewRoute: ApiPreviewRoute,
-  ApiRenderRoute: ApiRenderRoute,
+  ApiRenderRoute: ApiRenderRouteWithChildren,
   ApiRenderStatusRoute: ApiRenderStatusRoute,
   ApiRendersRoute: ApiRendersRoute,
   RSplatRoute: RSplatRoute,

@@ -8,7 +8,8 @@ import {
   utf8ByteLength,
   type CompositionFile,
 } from "../../lib/server/assets";
-import { enqueueRender } from "../../lib/server/render-jobs.mjs";
+import { CONTRACT_VERSION, PreflightError } from "../../lib/server/preflight.mjs";
+import { checkRender, enqueueRender } from "../../lib/server/render-jobs.mjs";
 
 // 32 MB by default so a composition with inlined images fits without any
 // environment plumbing. Base64 costs 4/3, so this bounds ~24 MB of assets.
@@ -82,14 +83,51 @@ export const Route = createFileRoute("/api/render")({
           }
         }
 
+        // Validation without side effects, so a client can iterate before
+        // spending a queue slot. Never enqueues.
+        if (new URL(request.url).searchParams.get("dryRun") === "1") {
+          try {
+            const verdict = await checkRender(files);
+            return Response.json(
+              {
+                ok: verdict.ok,
+                issues: verdict.issues,
+                warnings: verdict.warnings,
+                contractVersion: CONTRACT_VERSION,
+              },
+              { status: 200 },
+            );
+          } catch (err) {
+            return jsonError(msg(err), 400);
+          }
+        }
+
         let job;
         try {
           job = await enqueueRender(files, source);
         } catch (err) {
+          if (err instanceof PreflightError) {
+            return Response.json(
+              {
+                error: "preflight failed",
+                contractVersion: CONTRACT_VERSION,
+                docs: "/api/render/schema",
+                issues: err.issues,
+                warnings: err.warnings,
+              },
+              { status: 400 },
+            );
+          }
           return jsonError(`failed to queue render: ${msg(err)}`, 400);
         }
         return Response.json(
-          { id: job.id, status: job.status, statusUrl: `/api/render-status?id=${job.id}` },
+          {
+            id: job.id,
+            status: job.status,
+            statusUrl: `/api/render-status?id=${job.id}`,
+            warnings: job.warnings ?? [],
+            contractVersion: CONTRACT_VERSION,
+          },
           { status: 202 },
         );
       },

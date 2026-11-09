@@ -1,7 +1,10 @@
 export type RenderStatus = "queued" | "running" | "completed" | "failed";
 
+import type { PreflightResult, PreflightWarning } from "./preflight.d.mts";
+
 export interface RenderJob {
   id: string;
+  warnings?: PreflightWarning[];
   source: "bundled" | "html" | "files";
   status: RenderStatus;
   createdAt: string;
@@ -30,6 +33,7 @@ export function createRenderManager(options?: {
   ready(): Promise<void>;
 };
 
+export function checkRender(files: CompositionFile[]): Promise<PreflightResult>;
 export function enqueueRender(
   files: CompositionFile[],
   source: "bundled" | "html" | "files",

@@ -72,6 +72,7 @@ Copy `.env.example` to `.env` and edit the values before the first run:
 | `MAX_REQUEST_BYTES` | `67108864` (64 MB) | Whole-request body cap, enforced for every route before TanStack sees it. Base64 inflates uploads by ~33%. |
 | `MAX_RENDER_HTML_BYTES` | `33554432` (32 MB) | Cap for a single-file `{ "html": "..." }` composition. Base64 costs 4/3, so this bounds ~24 MB of inlined assets. |
 | `MAX_COMPOSITION_BYTES` | 0.75 × `MAX_REQUEST_BYTES` (48 MB) | Decoded budget for a multi-file `{ "files": [...] }` composition. Base64 costs 4/3, so this can never exceed 0.75 of the request cap. |
+| `PREFLIGHT_MODE` | `strict` | `strict` rejects an invalid composition, `warn` accepts it and reports the issues, `off` disables validation. Operator-only; never settable per request. |
 | `TRUST_PROXY_HEADERS` | `false` | Set `true` only when a trusted reverse proxy overwrites forwarded host/protocol headers. |
 
 AI generation is BYOK and supports two providers: OpenRouter and DeepSeek. The user supplies the key in the UI; it is used for that request and is not stored by this application. When AI is enabled, requests to the selected provider are an optional external dependency; previewing and rendering the bundled composition do not depend on them.
@@ -82,6 +83,25 @@ Choose the provider above the key field:
 - **DeepSeek** — paste a key from `platform.deepseek.com`. The catalog comes from DeepSeek's authenticated `/models` endpoint, so the key is sent to this app's server for that one call and then to `api.deepseek.com`; it is not logged, persisted, or cached. DeepSeek has no free tier, so the picker hides "Free only" and shows "Billed per token" instead of prices.
 
 `POST /api/generate` takes `forwardedProps.provider` (`openrouter` or `deepseek`; omitted means `openrouter` for backward compatibility) plus `forwardedProps.model`. Omitting the model selects the provider default — the first free OpenRouter model, or `deepseek-flash` for DeepSeek. If a catalog is unreachable, an explicit well-formed model id is still accepted so an outage does not block generation. Unknown ids and ids from the other provider are rejected. If the provider blocks the selected model, the request fails rather than switching to another model or provider.
+
+## What the preflight validates
+
+Every render is validated before it takes the single queue slot. The check runs
+inside `enqueueRender`, so it covers the bundled composition, `{ "html": … }` and
+`{ "files": […] }` alike, and cannot be skipped from a request.
+
+| Blocking | Non-blocking |
+| --- | --- |
+| Missing `data-composition-id`, `data-root`, `data-width`, `data-height` or `data-duration` | A font family with no `@font-face` (renders with the fallback font) |
+| `http(s)://` in `src`, `href` or `url()` — the render container is offline | An embedded image above 2 MB |
+| An `<img>`/`@font-face` target missing from the payload | A composition longer than 60 s |
+| A `data:` payload that does not decode, or a font whose bytes are not that format | |
+| A path with `..`, absolute, or backslash | |
+
+A rejection returns `400` with the offending `code`, a `message` and a concrete
+`fix`. `POST /api/render?dryRun=1` runs the same validation without queueing, and
+`GET /api/render/schema` publishes the whole contract for automated clients.
+See [docs/render-api.md](docs/render-api.md) and [AGENTS.md](AGENTS.md).
 
 ## Reverse proxy example
 

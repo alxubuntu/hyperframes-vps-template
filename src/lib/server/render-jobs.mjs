@@ -4,6 +4,7 @@ import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/prom
 import { Readable } from "node:stream";
 import { dirname, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
+import { PreflightError, preflight } from "./preflight.mjs";
 
 const MAX_FILES = 2_000;
 const REQUEST_BYTES =
@@ -14,6 +15,9 @@ const REQUEST_BYTES =
 const MAX_FILES_BYTES =
   Number.parseInt(process.env.MAX_COMPOSITION_BYTES ?? "", 10) || Math.floor(REQUEST_BYTES * 0.75);
 const MAX_ERROR_CHARS = 16_000;
+// strict: reject an invalid composition. warn: accept it but report the issues.
+// off: skip validation entirely. Only an operator changes this, never a request.
+const PREFLIGHT_MODE = process.env.PREFLIGHT_MODE || "strict";
 const DEFAULT_RENDER_TIMEOUT_MS = 10 * 60 * 1_000;
 
 function inside(root, candidate) {
@@ -50,6 +54,20 @@ function assertBase64(value, path) {
   if (value.length % 4 !== 0 || !BASE64_BODY.test(body)) {
     throw new Error(`invalid base64 content for ${path}`);
   }
+}
+
+function runPreflight(files) {
+  if (PREFLIGHT_MODE === "off") return { ok: true, issues: [], warnings: [] };
+  const verdict = preflight(files);
+  if (!verdict.ok && PREFLIGHT_MODE !== "warn") {
+    throw new PreflightError(verdict.issues, verdict.warnings);
+  }
+  return verdict;
+}
+
+/** Validate without queueing: backs POST /api/render?dryRun=1. */
+export async function checkRender(files) {
+  return preflight(validateFiles(files));
 }
 
 function validateFiles(files) {
@@ -257,6 +275,9 @@ export function createRenderManager(options = {}) {
   async function enqueue(files, source) {
     await ready();
     const checkedFiles = validateFiles(files);
+    // Mandatory here, not in the route: every input path (html, files, bundled)
+    // goes through this function, so nothing can skip the check.
+    const verdict = runPreflight(checkedFiles);
     const id = randomUUID();
     const now = new Date().toISOString();
     const job = {
@@ -265,6 +286,7 @@ export function createRenderManager(options = {}) {
       status: "queued",
       createdAt: now,
       updatedAt: now,
+      warnings: verdict.warnings,
       files: checkedFiles.map(({ path, bytes }) => ({ path, content: bytes.toString("base64") })),
     };
     jobs.set(id, job);
