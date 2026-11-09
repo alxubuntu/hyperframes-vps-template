@@ -67,7 +67,7 @@ Copy `.env.example` to `.env` and edit the values before the first run:
 | `ENABLE_AI_GEN` | `true` | Enables BYOK generation and custom-HTML rendering. Set `false` for a public demo that only renders the bundled composition. |
 | `PREVIEW_COMPOSITION_DIR` | `compositions/cloudflare-intro` | Bundled composition directory. It is a Docker build argument; rebuild the image after changing it. |
 | `RENDER_CONCURRENCY` | `1` | Simultaneous render jobs in this process; keep at `1` unless you have measured the memory cost. |
-| `RENDER_WORKERS` | `4` | HyperFrames workers per render. Each worker starts a Chromium process. Tune against available CPU and RAM. |
+| `RENDER_WORKERS` | `2` | HyperFrames workers per render. Each worker starts a Chromium process, so keep it at or below the container's CPU limit (`cpus: 2.0`). |
 | `RENDER_TIMEOUT_MS` | `600000` | Maximum time allowed for one render before it is terminated. |
 | `MAX_REQUEST_BYTES` | `67108864` (64 MB) | Whole-request body cap, enforced for every route before TanStack sees it. Base64 inflates uploads by ~33%. |
 | `MAX_RENDER_HTML_BYTES` | `33554432` (32 MB) | Cap for a single-file `{ "html": "..." }` composition. Base64 costs 4/3, so this bounds ~24 MB of inlined assets. |

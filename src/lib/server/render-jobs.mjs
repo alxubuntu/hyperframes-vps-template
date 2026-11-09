@@ -363,8 +363,8 @@ export function createRenderManager(options = {}) {
 
 async function runHyperFrames(projectDir, outputPath) {
   const binary = process.env.HYPERFRAMES_BIN || join(process.cwd(), "node_modules", ".bin", "hyperframes");
-  const configuredWorkers = Number(process.env.RENDER_WORKERS || 4);
-  const workers = String(Number.isFinite(configuredWorkers) ? Math.max(1, Math.min(16, configuredWorkers)) : 4);
+  const configuredWorkers = Number(process.env.RENDER_WORKERS || 2);
+  const workers = String(Number.isFinite(configuredWorkers) ? Math.max(1, Math.min(16, configuredWorkers)) : 2);
   const configuredTimeout = Number(process.env.RENDER_TIMEOUT_MS || DEFAULT_RENDER_TIMEOUT_MS);
   const timeoutMs = Number.isFinite(configuredTimeout)
     ? Math.max(30_000, configuredTimeout)
