@@ -6,7 +6,13 @@ import { dirname, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 
 const MAX_FILES = 2_000;
-const MAX_FILES_BYTES = 200 * 1024 * 1024;
+const REQUEST_BYTES =
+  Number.parseInt(process.env.MAX_REQUEST_BYTES ?? "", 10) || 64 * 1024 * 1024;
+// Base64 inflates a payload by 4/3, so a request can never carry more than 0.75
+// of its bytes as decoded composition. Derive the default from the request cap
+// instead of hard-coding a number the body limit can never reach.
+const MAX_FILES_BYTES =
+  Number.parseInt(process.env.MAX_COMPOSITION_BYTES ?? "", 10) || Math.floor(REQUEST_BYTES * 0.75);
 const MAX_ERROR_CHARS = 16_000;
 const DEFAULT_RENDER_TIMEOUT_MS = 10 * 60 * 1_000;
 
@@ -16,7 +22,7 @@ function inside(root, candidate) {
   return absoluteCandidate.startsWith(`${absoluteRoot}${sep}`);
 }
 
-function safeJoin(root, relativePath) {
+function assertSafePath(relativePath) {
   if (
     typeof relativePath !== "string" ||
     relativePath.length === 0 ||
@@ -24,11 +30,26 @@ function safeJoin(root, relativePath) {
     relativePath.startsWith("/") ||
     relativePath.split("/").some((part) => !part || part === "." || part === "..")
   ) {
-    throw new Error("invalid file path");
+    throw new Error(`invalid file path: ${String(relativePath).slice(0, 80)}`);
   }
+}
+
+function safeJoin(root, relativePath) {
+  assertSafePath(relativePath);
   const target = resolve(root, relativePath);
   if (!inside(root, target)) throw new Error("invalid file path");
   return target;
+}
+
+// A nested quantifier like (?:[A-Za-z0-9+/]{4})* recurses per group and
+// overflows V8's stack on a multi-megabyte string, so validation stays linear.
+const BASE64_BODY = /^[A-Za-z0-9+/]*$/;
+
+function assertBase64(value, path) {
+  const body = value.endsWith("==") ? value.slice(0, -2) : value.endsWith("=") ? value.slice(0, -1) : value;
+  if (value.length % 4 !== 0 || !BASE64_BODY.test(body)) {
+    throw new Error(`invalid base64 content for ${path}`);
+  }
 }
 
 function validateFiles(files) {
@@ -40,9 +61,10 @@ function validateFiles(files) {
     if (!file || typeof file.path !== "string" || typeof file.content !== "string") {
       throw new Error("each file must have a path and base64 content");
     }
-    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(file.content)) {
-      throw new Error(`invalid base64 content for ${file.path}`);
-    }
+    // Reject an unsafe path at enqueue time so the caller gets a 400 instead of
+    // a queued job that fails later inside the render sandbox.
+    assertSafePath(file.path);
+    assertBase64(file.content, file.path);
     const bytes = Buffer.from(file.content, "base64");
     totalBytes += bytes.byteLength;
     if (totalBytes > MAX_FILES_BYTES) throw new Error(`composition exceeds ${MAX_FILES_BYTES} bytes`);

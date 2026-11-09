@@ -10,10 +10,15 @@ import {
 } from "../../lib/server/assets";
 import { enqueueRender } from "../../lib/server/render-jobs.mjs";
 
-const MAX_RENDER_HTML_BYTES = 2 * 1024 * 1024;
+const MAX_RENDER_HTML_BYTES =
+  Number.parseInt(process.env.MAX_RENDER_HTML_BYTES ?? "", 10) || 2 * 1024 * 1024;
+// Mirrors the enqueue-side limit; validated again there with the real byte count.
+const MAX_COMPOSITION_FILES = 2_000;
 
 interface RenderRequestBody {
   html?: string;
+  /** Multi-file composition; each entry is a relative path plus base64 bytes. */
+  files?: unknown;
 }
 
 export const Route = createFileRoute("/api/render")({
@@ -21,7 +26,7 @@ export const Route = createFileRoute("/api/render")({
     handlers: {
       POST: async ({ request }) => {
         let files: CompositionFile[];
-        let source: "bundled" | "html" = "bundled";
+        let source: "bundled" | "html" | "files" = "bundled";
 
         // Empty body falls through to the bundled composition for back-compat
         // with the original "click Render" flow that doesn't post any body.
@@ -50,6 +55,23 @@ export const Route = createFileRoute("/api/render")({
           }
           files = htmlToFiles(body.html);
           source = "html";
+        } else if (body?.files !== undefined) {
+          // Multi-file uploads share the custom-HTML opt-in and go through the
+          // same path validator that guards the render directory.
+          if (process.env.ENABLE_AI_GEN !== "true") {
+            return jsonError(
+              'Rendering custom HTML is disabled. Set ENABLE_AI_GEN="true" in your .env file to enable it.',
+              403,
+            );
+          }
+          if (!Array.isArray(body.files)) {
+            return jsonError("files must be an array of { path, content }", 400);
+          }
+          if (body.files.length === 0 || body.files.length > MAX_COMPOSITION_FILES) {
+            return jsonError(`files must contain between 1 and ${MAX_COMPOSITION_FILES} items`, 400);
+          }
+          files = body.files as CompositionFile[];
+          source = "files";
         } else {
           try {
             files = await loadBundledCompositionFiles();

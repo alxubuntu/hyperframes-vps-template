@@ -35,6 +35,12 @@ services:
       RENDER_TEMP_DIR: /data/temp
       RENDERS_DIR: /data/videos
       HYPERFRAMES_BIN: /app/renderer/node_modules/.bin/hyperframes
+      # Size caps. ${VAR:-default} lets .env override these without editing the
+      # compose file. The request cap must stay above the composition cap: a
+      # 32 MB HTML arrives as a ~32 MB JSON body, and base64 costs 4/3 on disk.
+      MAX_RENDER_HTML_BYTES: ${MAX_RENDER_HTML_BYTES:-33554432}
+      MAX_REQUEST_BYTES: ${MAX_REQUEST_BYTES:-37748736}
+      MAX_COMPOSITION_BYTES: ${MAX_COMPOSITION_BYTES:-33554432}
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
     volumes:

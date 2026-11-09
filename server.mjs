@@ -9,7 +9,11 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 const CLIENT_ROOT = resolve(ROOT, "dist/client");
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
-const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
+// Whole-request cap, enforced for every route before TanStack sees the body.
+// Base64 inflates a composition by ~33%, so size this against the largest
+// upload you intend to submit, not the MP4 you expect back.
+const MAX_REQUEST_BYTES =
+  Number.parseInt(process.env.MAX_REQUEST_BYTES ?? "", 10) || 64 * 1024 * 1024;
 const TYPES = {
   ".avif": "image/avif",
   ".css": "text/css; charset=utf-8",
