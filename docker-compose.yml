@@ -46,6 +46,18 @@ services:
       MAX_COMPOSITION_BYTES: ${MAX_COMPOSITION_BYTES:-33554432}
       # One Chromium per worker: keep this at or below the cpus limit above.
       RENDER_WORKERS: ${RENDER_WORKERS:-2}
+    # Optional reverse-proxy routing. Disabled unless TRAEFIK_ENABLE is true,
+    # so a deployment without Traefik behaves exactly as before. Traefik runs
+    # with host networking here, so it reaches this container over its own
+    # project network: no shared network and no published port are required.
+    # TRAEFIK_ROUTER must be unique per instance (router names are global).
+    labels:
+      "traefik.enable": "${TRAEFIK_ENABLE:-false}"
+      "traefik.http.routers.${TRAEFIK_ROUTER:-hyperframes}.rule": "Host(`${TRAEFIK_HOST:-localhost}`)"
+      "traefik.http.routers.${TRAEFIK_ROUTER:-hyperframes}.service": "${TRAEFIK_ROUTER:-hyperframes}"
+      "traefik.http.routers.${TRAEFIK_ROUTER:-hyperframes}.entrypoints": "websecure"
+      "traefik.http.routers.${TRAEFIK_ROUTER:-hyperframes}.tls.certresolver": "${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      "traefik.http.services.${TRAEFIK_ROUTER:-hyperframes}.loadbalancer.server.port": "3000"
     ports:
       # Host port. With no WEB_PORT (or an empty one) Docker assigns a free port:
       # read it back with `docker compose port hyperframes 3000`. Pin a number

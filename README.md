@@ -124,7 +124,31 @@ location / {
 }
 ```
 
-Then set `TRUST_PROXY_HEADERS=true` in `.env` and recreate the service. Keep the upstream port private; only the proxy should reach it. The app intentionally adds no authentication layer, so protect it at the proxy/network boundary if it is not intended for public use. Rendering untrusted generated HTML consumes CPU/RAM; turn off AI/custom HTML for a public bundled-only demo.
+Then set `TRUST_PROXY_HEADERS=true` in `.env` and recreate the service.
+
+### Traefik with labels (no published port needed)
+
+The compose file ships opt-in Traefik labels. With `TRAEFIK_ENABLE=false` nothing
+changes. To route by hostname instead of publishing a port:
+
+```env
+TRAEFIK_ENABLE=true
+TRAEFIK_ROUTER=hf-v4
+TRAEFIK_HOST=v4.147.93.12.91.sslip.io
+BIND_ADDR=127.0.0.1
+```
+
+- `TRAEFIK_ROUTER` must be **unique per instance**: router and service names are
+  global to the proxy, and two containers declaring the same name fight over it.
+- `TRAEFIK_HOST` is any name that resolves to the host. Without a domain,
+  `sslip.io` maps `<label>.<ip>.sslip.io` to that IP for free, so
+  `v4.147.93.12.91.sslip.io` works with no DNS setup.
+- The labels request a certificate through the `letsencrypt` certresolver
+  (`TRAEFIK_CERTRESOLVER` overrides it). If issuance fails the router still
+  serves Traefik's self-signed certificate, so the browser warns but the site
+  loads.
+- Traefik here runs with host networking, so it reaches this container over the
+  project's own network: no shared network and no published port are needed. Keep the upstream port private; only the proxy should reach it. The app intentionally adds no authentication layer, so protect it at the proxy/network boundary if it is not intended for public use. Rendering untrusted generated HTML consumes CPU/RAM; turn off AI/custom HTML for a public bundled-only demo.
 
 ## Build, run, and update
 
