@@ -36,12 +36,14 @@ sudo chown -R 1000:1000 data
 docker compose build
 docker compose up -d --wait
 docker compose ps
-curl -fsS http://127.0.0.1:3000/healthz
+# The host port is assigned by Docker: read it before calling the app.
+PORT=$(docker compose port hyperframes 3000 | cut -d: -f2)
+curl -fsS "http://127.0.0.1:${PORT}/healthz"
 ```
 
 The `init-data` service runs before the app and gives the three `data/` bind mounts to UID/GID 1000, which is the user the application runs as. The Dockerfile also changes ownership of HyperFrames' browser and font cache to that user, because the render CLI creates those files during the image build.
 
-Open the application through your reverse proxy. The Compose port is bound to `127.0.0.1` by default so the Node service is not exposed directly to the public Internet. Change `WEB_PORT` in `.env` to choose another loopback port.
+Open the application through your reverse proxy. The Compose port is bound to `127.0.0.1` by default so the Node service is not exposed directly to the public Internet. `WEB_PORT` ships empty, so Docker assigns a free host port and two instances on one machine never collide; set a number in `.env` when you need a stable URL (a reverse proxy does).
 
 To stop the service without deleting video data:
 
@@ -64,7 +66,7 @@ Copy `.env.example` to `.env` and edit the values before the first run:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `BIND_ADDR` | `127.0.0.1` | Host interface the app publishes on. `0.0.0.0` exposes it directly; keep loopback behind a proxy. |
-| `WEB_PORT` | `3000` | Host loopback port published by Compose. |
+| `WEB_PORT` | *(empty)* | Host port published by Compose. Empty lets Docker assign a free one, which never collides with another instance; read it with `docker compose port hyperframes 3000`. Set a number for a stable URL. |
 | `ENABLE_AI_GEN` | `true` | Enables BYOK generation and custom-HTML rendering. Set `false` for a public demo that only renders the bundled composition. |
 | `PREVIEW_COMPOSITION_DIR` | `compositions/cloudflare-intro` | Bundled composition directory. It is a Docker build argument; rebuild the image after changing it. |
 | `RENDER_CONCURRENCY` | `1` | Simultaneous render jobs in this process; keep at `1` unless you have measured the memory cost. |
@@ -106,7 +108,7 @@ See [docs/render-api.md](docs/render-api.md) and [AGENTS.md](AGENTS.md).
 
 ## Reverse proxy example
 
-Configure Nginx or Traefik to forward the public site to `http://127.0.0.1:3000`. For Nginx, allow the custom HTML body limit and disable buffering so AI Server-Sent Events stream through:
+Pin `WEB_PORT` in `.env` first — a proxy needs a fixed upstream port. Then configure Nginx or Traefik to forward the public site to `http://127.0.0.1:3000` (or whatever you pinned). For Nginx, allow the custom HTML body limit and disable buffering so AI Server-Sent Events stream through:
 
 ```nginx
 location / {
