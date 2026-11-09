@@ -63,6 +63,7 @@ Copy `.env.example` to `.env` and edit the values before the first run:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `BIND_ADDR` | `127.0.0.1` | Host interface the app publishes on. `0.0.0.0` exposes it directly; keep loopback behind a proxy. |
 | `WEB_PORT` | `3000` | Host loopback port published by Compose. |
 | `ENABLE_AI_GEN` | `true` | Enables BYOK generation and custom-HTML rendering. Set `false` for a public demo that only renders the bundled composition. |
 | `PREVIEW_COMPOSITION_DIR` | `compositions/cloudflare-intro` | Bundled composition directory. It is a Docker build argument; rebuild the image after changing it. |
