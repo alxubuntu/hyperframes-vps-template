@@ -26,6 +26,9 @@ services:
         PREVIEW_COMPOSITION_DIR: ${PREVIEW_COMPOSITION_DIR:-compositions/cloudflare-intro}
     restart: unless-stopped
     init: true
+    # Hard CPU ceiling for this container. Each render worker starts its own
+    # Chromium, so RENDER_WORKERS above the CPU count mostly competes with itself.
+    cpus: 2.0
     env_file:
       - .env
     environment:
