@@ -70,7 +70,7 @@ Copy `.env.example` to `.env` and edit the values before the first run:
 | `RENDER_WORKERS` | `4` | HyperFrames workers per render. Each worker starts a Chromium process. Tune against available CPU and RAM. |
 | `RENDER_TIMEOUT_MS` | `600000` | Maximum time allowed for one render before it is terminated. |
 | `MAX_REQUEST_BYTES` | `67108864` (64 MB) | Whole-request body cap, enforced for every route before TanStack sees it. Base64 inflates uploads by ~33%. |
-| `MAX_RENDER_HTML_BYTES` | `2097152` (2 MB) | Cap for a single-file `{ "html": "..." }` composition. |
+| `MAX_RENDER_HTML_BYTES` | `33554432` (32 MB) | Cap for a single-file `{ "html": "..." }` composition. Base64 costs 4/3, so this bounds ~24 MB of inlined assets. |
 | `MAX_COMPOSITION_BYTES` | 0.75 × `MAX_REQUEST_BYTES` (48 MB) | Decoded budget for a multi-file `{ "files": [...] }` composition. Base64 costs 4/3, so this can never exceed 0.75 of the request cap. |
 | `TRUST_PROXY_HEADERS` | `false` | Set `true` only when a trusted reverse proxy overwrites forwarded host/protocol headers. |
 

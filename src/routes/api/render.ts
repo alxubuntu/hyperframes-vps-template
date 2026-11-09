@@ -10,8 +10,10 @@ import {
 } from "../../lib/server/assets";
 import { enqueueRender } from "../../lib/server/render-jobs.mjs";
 
+// 32 MB by default so a composition with inlined images fits without any
+// environment plumbing. Base64 costs 4/3, so this bounds ~24 MB of assets.
 const MAX_RENDER_HTML_BYTES =
-  Number.parseInt(process.env.MAX_RENDER_HTML_BYTES ?? "", 10) || 2 * 1024 * 1024;
+  Number.parseInt(process.env.MAX_RENDER_HTML_BYTES ?? "", 10) || 32 * 1024 * 1024;
 // Mirrors the enqueue-side limit; validated again there with the real byte count.
 const MAX_COMPOSITION_FILES = 2_000;
 
