@@ -47,9 +47,10 @@ services:
       # One Chromium per worker: keep this at or below the cpus limit above.
       RENDER_WORKERS: ${RENDER_WORKERS:-2}
     ports:
-      # Loopback by default. Set BIND_ADDR=0.0.0.0 in .env to publish on the
-      # public interface (only when there is no reverse proxy in front).
-      - "${BIND_ADDR:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+      # Host port. Unset WEB_PORT for 3000; set WEB_PORT= (empty) to let Docker
+      # pick a free port, then read it with `docker compose port hyperframes 3000`.
+      # Note the dash, not the colon: an empty value must reach Docker as empty.
+      - "${BIND_ADDR:-127.0.0.1}:${WEB_PORT-3000}:3000"
     volumes:
       - ./data/projects:/data/projects
       - ./data/temp:/data/temp
