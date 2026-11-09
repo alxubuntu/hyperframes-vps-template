@@ -148,7 +148,10 @@ BIND_ADDR=127.0.0.1
   serves Traefik's self-signed certificate, so the browser warns but the site
   loads.
 - Traefik here runs with host networking, so it reaches this container over the
-  project's own network: no shared network and no published port are needed. Keep the upstream port private; only the proxy should reach it. The app intentionally adds no authentication layer, so protect it at the proxy/network boundary if it is not intended for public use. Rendering untrusted generated HTML consumes CPU/RAM; turn off AI/custom HTML for a public bundled-only demo.
+  project's own network: no shared network and no published port are needed.
+- The labels use **list** syntax. Compose interpolates `${...}` in values only,
+  never in mapping keys, so writing them as a `traefik.http.routers.${X}.rule:`
+  key leaves the placeholder literal and Traefik silently drops the router. Keep the upstream port private; only the proxy should reach it. The app intentionally adds no authentication layer, so protect it at the proxy/network boundary if it is not intended for public use. Rendering untrusted generated HTML consumes CPU/RAM; turn off AI/custom HTML for a public bundled-only demo.
 
 ## Build, run, and update
 
