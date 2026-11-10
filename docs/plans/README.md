@@ -39,9 +39,11 @@ alternatives that were rejected.
   updated. List with a command instead:
 
   ```bash
-  grep -H '^Status:' docs/plans/*.md
-  grep -l '^Status: approved' docs/plans/*.md
+  rg '^Status:' docs/plans                 # every plan and its status
+  rg -l '^Status: approved' docs/plans     # only the ones ready to build
   ```
+
+  On Windows, `Select-String '^Status:' docs/plans/*.md` does the same.
 
 - **Sections are optional.** Use the ones the plan needs; a two-paragraph plan
   does not need seven headings. `Open decisions` and `Not covered` are worth
