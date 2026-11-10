@@ -17,3 +17,11 @@ public/_hyperframes/
 .tanstack
 .nitro
 .output
+
+# Local dependency caches and toolchains
+/.tmp-bun/
+/.tools/
+
+# Runtime libraries copied from dependencies by scripts/build.mjs
+/public/compositions/*/assets/gsap.min.js
+/public/compositions/*/assets/hyperframe.runtime.iife.js
