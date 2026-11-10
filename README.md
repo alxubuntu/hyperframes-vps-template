@@ -106,6 +106,13 @@ A rejection returns `400` with the offending `code`, a `message` and a concrete
 `GET /api/render/schema` publishes the whole contract for automated clients.
 See [docs/render-api.md](docs/render-api.md) and [AGENTS.md](AGENTS.md).
 
+## Deployment topologies
+
+This stack is deployed either from a git checkout or from a hosting panel.
+Both are documented in [docs/deployment.md](docs/deployment.md), together with
+the panel mechanics, the port rules, the Traefik label gotcha and the
+symptom-to-cause table used to debug routing.
+
 ## Reverse proxy example
 
 Pin `WEB_PORT` in `.env` first — a proxy needs a fixed upstream port. Then configure Nginx or Traefik to forward the public site to `http://127.0.0.1:3000` (or whatever you pinned). For Nginx, allow the custom HTML body limit and disable buffering so AI Server-Sent Events stream through:

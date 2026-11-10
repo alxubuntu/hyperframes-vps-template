@@ -9,18 +9,33 @@ returns MP4s. Read this before calling the API or changing the render path.
 offline. An `<img src="https://…">` does not fail loudly — it renders a hole.
 Every asset must travel inside the request.
 
-## Deploy is manual
+## Deploying
 
-There is no CI/CD. After committing and pushing to `main`:
+There is no CI/CD, and there are two possible topologies. Check which one you
+are in before running anything: `git -C <project dir> status`.
+
+**A git checkout** (the directory has `.git`):
 
 ```bash
-cd /docker/hyperframes-app
+cd <project dir>
 git pull
 docker compose build          # required: the app code is compiled into the image
 docker compose up -d --force-recreate
 ```
 
-The container is `hyperframes-app-hyperframes-1`; the service is `hyperframes`.
+**A hosting panel** (no `.git`, e.g. Hostinger Docker Manager): the panel clones
+the repo to `/tmp`, builds there, and materializes `/docker/<project>/` with only
+the compose file, `.env`, `Dockerfile` and `data/`. That directory has **no source**,
+so `docker compose build` inside it fails. Deploy from the panel; to recreate with
+a newer compose and the same image use `--no-build`:
+
+```bash
+cd /docker/<project>
+docker compose up -d --force-recreate --no-build
+```
+
+The service is always `hyperframes`; the container is `<project>-hyperframes-1`.
+Full mechanics, port rules and Traefik routing: [docs/deployment.md](docs/deployment.md).
 
 ## Calling the API
 
@@ -63,10 +78,24 @@ The container is `hyperframes-app-hyperframes-1`; the service is `hyperframes`.
 A `400` carries `issues[]`, each with `code`, `message` and `fix`. Read the
 `fix` — it names the exact replacement payload. Do not retry unchanged.
 
+## Gotchas that already bit us
+
+- **Compose does not interpolate `${...}` in mapping keys**, only in values. Label
+  keys written as `traefik.http.routers.${X}.rule:` keep the placeholder literally
+  and Traefik drops the router. Keep such labels in list form.
+- **Never put an equals sign in a comment in `.env.example`**: hosting panels import
+  that file line by line and turn the comment into a broken variable.
+- **A free port is not a reachable port**: publishing a non-standard host port also
+  needs the firewall opened, and a timeout (not "connection refused") usually means
+  a firewall is dropping the packets.
+- **`/docker/<project>` in a panel deployment has no source code**; do not build there.
+- **A nested-quantifier regex over multi-megabyte base64 overflows the stack.**
+  Validation must stay linear.
+- **The render container has no network**, so a font or image referenced by URL
+  renders as a hole, not as an error.
+
 ## Repo rules
 
 - Do not start a local server or dev server to "check" things; verify against
   the deployed instance or with plain `node` on pure modules.
-- Keep validation linear: a nested-quantifier regex over multi-megabyte base64
-  overflows the stack (this already happened once).
 - `npm run typecheck` and `node node_modules/oxlint/bin/oxlint <files>` must pass.
