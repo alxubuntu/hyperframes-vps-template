@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import { dirname, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PreflightError, preflight } from "./preflight.mjs";
+import { createProgressParser } from "./render-progress.mjs";
 
 const MAX_FILES = 2_000;
 const REQUEST_BYTES =
@@ -149,6 +150,45 @@ export function createRenderManager(options = {}) {
   let active = 0;
   let saveTail = Promise.resolve();
   let initPromise;
+  const progressTimers = new Map();
+
+  function scheduleProgressSave(id) {
+    if (progressTimers.has(id)) return;
+    const timer = setTimeout(() => {
+      progressTimers.delete(id);
+      void persist().catch((error) => console.error("Could not save render progress", error));
+    }, 2000);
+    timer.unref();
+    progressTimers.set(id, timer);
+  }
+
+  function cancelProgressSave(id) {
+    const timer = progressTimers.get(id);
+    if (timer) clearTimeout(timer);
+    progressTimers.delete(id);
+  }
+
+  function updateProgress(job, event = {}) {
+    if (job.status !== "running") return;
+    const now = new Date().toISOString();
+    job.lastActivityAt = now;
+    const phases = ["preparing", "unknown", "rendering", "encoding", "finalizing"];
+    const next = event.phase;
+    let advanced = false;
+    if (phases.includes(next) && (phases.indexOf(next) > phases.indexOf(job.phase) || (job.phase === "unknown" && next === "preparing"))) {
+      job.phase = next;
+      job.phaseProgress = null;
+      advanced = true;
+    }
+    if (next === job.phase && Number.isFinite(event.phaseProgress) && event.phaseProgress >= 0 && event.phaseProgress <= 100 &&
+        (job.phaseProgress === null || event.phaseProgress > job.phaseProgress)) {
+      job.phaseProgress = event.phaseProgress;
+      advanced = true;
+    }
+    if (advanced) job.progressUpdatedAt = now;
+    job.updatedAt = now;
+    scheduleProgressSave(job.id);
+  }
 
   function persist() {
     const snapshot = JSON.stringify([...jobs.values()], null, 2);
@@ -193,10 +233,17 @@ export function createRenderManager(options = {}) {
     let changed = false;
     for (const job of restored) {
       if (!job || typeof job.id !== "string" || !/^[0-9a-f-]{36}$/i.test(job.id)) continue;
+      job.phase ??= job.status === "completed" ? "completed" : job.status === "queued" ? "queued" : "unknown";
+      job.phaseProgress ??= job.status === "completed" ? 100 : null;
+      job.startedAt ??= null;
+      job.lastActivityAt ??= null;
+      job.progressUpdatedAt ??= null;
       if (job.status === "running") {
         job.updatedAt = new Date().toISOString();
         if (await hasValidMp4(join(rendersDir, `${job.id}.mp4`))) {
           job.status = "completed";
+          job.phase = "completed";
+          job.phaseProgress = 100;
           job.completedAt = job.updatedAt;
           job.videoUrl = `/r/${job.id}`;
           job.error = undefined;
@@ -224,6 +271,11 @@ export function createRenderManager(options = {}) {
     if (!job || job.status !== "queued") return;
     job.status = "running";
     job.updatedAt = new Date().toISOString();
+    job.startedAt = job.updatedAt;
+    job.phase = "preparing";
+    job.phaseProgress = null;
+    job.lastActivityAt = job.updatedAt;
+    job.progressUpdatedAt = job.updatedAt;
     await persist();
 
     const workDir = join(tempDir, id);
@@ -246,17 +298,23 @@ export function createRenderManager(options = {}) {
       delete job.files;
       await persist();
 
+      updateProgress(job, { phase: "unknown" });
       if (options.render) {
-        await options.render(projectDir, outputTemp);
+        await options.render(projectDir, outputTemp, (event) => updateProgress(job, event));
       } else {
-        await runHyperFrames(projectDir, outputTemp);
+        await runHyperFrames(projectDir, outputTemp, (event) => updateProgress(job, event));
       }
+      updateProgress(job, { phase: "finalizing" });
       if (!(await hasValidMp4(outputTemp))) {
         throw new Error("renderer output does not have a valid MP4 file signature");
       }
       await rename(outputTemp, outputFinal);
       job.status = "completed";
       job.updatedAt = new Date().toISOString();
+      job.phase = "completed";
+      job.phaseProgress = 100;
+      job.lastActivityAt = job.updatedAt;
+      job.progressUpdatedAt = job.updatedAt;
       job.completedAt = job.updatedAt;
       job.videoUrl = `/r/${id}`;
       job.error = undefined;
@@ -266,6 +324,7 @@ export function createRenderManager(options = {}) {
       job.error = error instanceof Error ? error.message.slice(0, MAX_ERROR_CHARS) : String(error);
       console.error(`[render:${id}] failed`, job.error);
     } finally {
+      cancelProgressSave(id);
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
       await rm(outputTemp, { force: true }).catch(() => {});
       await persist();
@@ -286,6 +345,11 @@ export function createRenderManager(options = {}) {
       status: "queued",
       createdAt: now,
       updatedAt: now,
+      phase: "queued",
+      phaseProgress: null,
+      startedAt: null,
+      lastActivityAt: null,
+      progressUpdatedAt: null,
       warnings: verdict.warnings,
       files: checkedFiles.map(({ path, bytes }) => ({ path, content: bytes.toString("base64") })),
     };
@@ -361,7 +425,7 @@ export function createRenderManager(options = {}) {
   return { enqueue, get, listCompleted, serveVideo, ready };
 }
 
-async function runHyperFrames(projectDir, outputPath) {
+async function runHyperFrames(projectDir, outputPath, onProgress) {
   const binary = process.env.HYPERFRAMES_BIN || join(process.cwd(), "node_modules", ".bin", "hyperframes");
   const configuredWorkers = Number(process.env.RENDER_WORKERS || 2);
   const workers = String(Number.isFinite(configuredWorkers) ? Math.max(1, Math.min(16, configuredWorkers)) : 2);
@@ -371,11 +435,15 @@ async function runHyperFrames(projectDir, outputPath) {
     : DEFAULT_RENDER_TIMEOUT_MS;
   await new Promise((resolveRun, reject) => {
     const child = spawn(binary, ["render", projectDir, "--output", outputPath, "--workers", workers], {
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    const parser = createProgressParser(onProgress);
+    child.stdout.on("data", (chunk) => { onProgress({}); parser.write(chunk); });
+    child.stdout.on("end", () => parser.end());
     const stderr = [];
     let stderrSize = 0;
     child.stderr.on("data", (chunk) => {
+      onProgress({});
       const bytes = Buffer.from(chunk);
       stderr.push(bytes);
       stderrSize += bytes.length;

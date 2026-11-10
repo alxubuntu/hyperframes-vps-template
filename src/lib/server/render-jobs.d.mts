@@ -1,4 +1,5 @@
 export type RenderStatus = "queued" | "running" | "completed" | "failed";
+export type RenderPhase = "queued" | "preparing" | "unknown" | "rendering" | "encoding" | "finalizing" | "completed";
 
 import type { PreflightResult, PreflightWarning } from "./preflight.d.mts";
 
@@ -7,6 +8,11 @@ export interface RenderJob {
   warnings?: PreflightWarning[];
   source: "bundled" | "html" | "files";
   status: RenderStatus;
+  phase: RenderPhase;
+  phaseProgress: number | null;
+  startedAt: string | null;
+  lastActivityAt: string | null;
+  progressUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -24,7 +30,7 @@ export function createRenderManager(options?: {
   tempDir?: string;
   rendersDir?: string;
   concurrency?: number;
-  render?: (projectDir: string, outputPath: string) => Promise<void>;
+  render?: (projectDir: string, outputPath: string, onProgress: (event: { phase?: RenderPhase; phaseProgress?: number | null }) => void) => Promise<void>;
 }): {
   enqueue(files: CompositionFile[], source: "bundled" | "html" | "files"): Promise<RenderJob>;
   get(id: string): Promise<RenderJob | null>;

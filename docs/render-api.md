@@ -17,6 +17,14 @@ GET  /r/<uuid>                       → video/mp4 (Range supported, ?download=1
 GET  /api/renders                    → completed renders
 ```
 
+Status responses are `no-store`. They include `phase` and `phaseProgress`
+(0–100 for that phase only, or null when unknown). Frame progress is based on
+HyperFrames 0.4.14 global frame counters; it is not overall render completion.
+`startedAt`, `lastActivityAt`, and `progressUpdatedAt` are timestamps or null.
+Activity can be log output without forward progress. A completed phase is not a
+completed video: only `status: completed` confirms the MP4 is ready. Clients
+should poll until a terminal state and handle missing fields from older servers.
+
 ## Payloads
 
 | Mode | Body | Notes |

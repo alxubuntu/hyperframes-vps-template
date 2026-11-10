@@ -14,6 +14,11 @@ const SCHEMA = {
     video: "GET /r/<uuid>  (MP4, supports Range and ?download=1)",
     list: "GET /api/renders",
   },
+  renderStatus: {
+    phase: "queued, preparing, unknown, rendering, encoding, finalizing, or completed",
+    phaseProgress: "0-100 within the current phase only; null when unavailable",
+    timestamps: "startedAt, lastActivityAt and progressUpdatedAt are ISO timestamps or null",
+  },
   modes: {
     bundled: { body: "{} or no body", description: "Renders the composition shipped with the server." },
     html: {

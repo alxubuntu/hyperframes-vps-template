@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Hint = { kind: "link"; url: string } | { kind: "message"; className: string; text: string };
 type SavedRender = { id: string; completedAt: string; videoUrl: string; fileName: string };
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+type RenderJob = { status: string; videoUrl?: string; error?: string; phase?: string; phaseProgress?: number | null; startedAt?: string | null; lastActivityAt?: string | null; progressUpdatedAt?: string | null };
 
 export function RenderControls({
   generatedHtml,
@@ -15,6 +15,9 @@ export function RenderControls({
   const [rendering, setRendering] = useState(false);
   const [hint, setHint] = useState<Hint | null>(null);
   const [renders, setRenders] = useState<SavedRender[]>([]);
+  const [job, setJob] = useState<RenderJob | null>(null);
+  const [clock, setClock] = useState(Date.now());
+  const request = useRef<AbortController | null>(null);
 
   async function refreshRenders() {
     try {
@@ -27,9 +30,20 @@ export function RenderControls({
 
   useEffect(() => {
     void refreshRenders();
+    return () => request.current?.abort();
   }, []);
 
+  useEffect(() => {
+    if (!rendering) return;
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [rendering]);
+
   async function handleRender() {
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    setJob(null);
     setRendering(true);
     setHint({
       kind: "message",
@@ -38,7 +52,7 @@ export function RenderControls({
     });
 
     try {
-      const init: RequestInit = { method: "POST" };
+      const init: RequestInit = { method: "POST", signal: controller.signal };
       if (generatedHtml) {
         init.headers = { "content-type": "application/json" };
         init.body = JSON.stringify({ html: generatedHtml });
@@ -57,33 +71,34 @@ export function RenderControls({
         throw new Error(message);
       }
       const accepted = (await res.json()) as { id: string; statusUrl: string };
-      const deadline = Date.now() + 10 * 60 * 1000;
-      while (Date.now() < deadline) {
-        await sleep(1500);
-        const statusResponse = await fetch(accepted.statusUrl);
-        if (!statusResponse.ok) throw new Error(`Could not check render status (${statusResponse.status})`);
-        const job = (await statusResponse.json()) as { status: string; videoUrl?: string; error?: string };
-        if (job.status === "completed" && job.videoUrl) {
-          setHint({ kind: "link", url: job.videoUrl });
+      while (!controller.signal.aborted) {
+        const statusResponse = await fetch(accepted.statusUrl, { signal: controller.signal, cache: "no-store" });
+        if (!statusResponse.ok) throw new Error(statusResponse.status === 401 ? "Session expired. Sign in again to check the render." : `Could not check render status (${statusResponse.status})`);
+        const current = (await statusResponse.json()) as RenderJob;
+        if (controller.signal.aborted) return;
+        setJob(current);
+        if (current.status === "completed" && current.videoUrl) {
+          setHint({ kind: "link", url: current.videoUrl });
           void refreshRenders();
           return;
         }
-        if (job.status === "failed") throw new Error(job.error || "Render failed");
-        setHint({
-          kind: "message",
-          className: "hint",
-          text: job.status === "queued" ? "Render queued…" : "Rendering MP4…",
+        if (current.status === "failed") throw new Error(current.error || "Render failed");
+        setHint(null);
+        await new Promise<void>((resolve) => {
+          const finish = () => { clearTimeout(timer); controller.signal.removeEventListener("abort", finish); resolve(); };
+          const timer = setTimeout(finish, 2000);
+          controller.signal.addEventListener("abort", finish, { once: true });
         });
       }
-      throw new Error("Render is still running. Reload the page to check saved renders.");
     } catch (err) {
+      if (controller.signal.aborted) return;
       setHint({
         kind: "message",
         className: "hint error",
         text: err instanceof Error ? err.message : "Render failed",
       });
     } finally {
-      setRendering(false);
+      if (!controller.signal.aborted) setRendering(false);
     }
   }
 
@@ -114,6 +129,16 @@ export function RenderControls({
         ) : (
           <p className={hint.className}>{hint.text}</p>
         ))}
+      {rendering && job && (
+        <div className="hint" aria-live="polite">
+          <p>{job.status === "queued" ? "Render queued" : ({ preparing: "Preparing", rendering: "Rendering frames", encoding: "Encoding", finalizing: "Finalizing" } as Record<string, string>)[job.phase ?? ""] ?? "Render running"}
+            {job.phaseProgress != null ? `: ${job.phaseProgress}%` : "…"}</p>
+          {job.phaseProgress != null && <progress max={100} value={job.phaseProgress} />}
+          {job.startedAt && <p>Elapsed: {Math.max(0, Math.floor((clock - Date.parse(job.startedAt)) / 1000))}s</p>}
+          {job.progressUpdatedAt && <p>No progress signal for {Math.max(0, Math.floor((clock - Date.parse(job.progressUpdatedAt)) / 1000))}s</p>}
+          {job.lastActivityAt && <p>Last activity: {Math.max(0, Math.floor((clock - Date.parse(job.lastActivityAt)) / 1000))}s ago</p>}
+        </div>
+      )}
       {renders.length > 0 && (
         <div className="render-history" aria-live="polite">
           <h2>Saved videos</h2>

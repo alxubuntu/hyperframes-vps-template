@@ -7,10 +7,18 @@ export const Route = createFileRoute("/api/render-status")({
     handlers: {
       GET: async ({ request }) => {
         const id = new URL(request.url).searchParams.get("id") ?? "";
-        if (!/^[0-9a-f-]{36}$/i.test(id)) return jsonError("invalid render job id", 400);
+        if (!/^[0-9a-f-]{36}$/i.test(id)) {
+          const response = jsonError("invalid render job id", 400);
+          response.headers.set("cache-control", "no-store");
+          return response;
+        }
         const job = await getRenderJob(id);
-        if (!job) return jsonError("render job not found", 404);
-        return Response.json(job);
+        if (!job) {
+          const response = jsonError("render job not found", 404);
+          response.headers.set("cache-control", "no-store");
+          return response;
+        }
+        return Response.json(job, { headers: { "cache-control": "no-store" } });
       },
     },
   },
