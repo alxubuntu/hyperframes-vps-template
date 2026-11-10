@@ -99,3 +99,8 @@ A `400` carries `issues[]`, each with `code`, `message` and `fix`. Read the
 - Do not start a local server or dev server to "check" things; verify against
   the deployed instance or with plain `node` on pure modules.
 - `npm run typecheck` and `node node_modules/oxlint/bin/oxlint <files>` must pass.
+- Design work that is decided but not yet shipped lives in `docs/plans/`, one
+  file per plan, with a `Status:` line instead of a board. Convention:
+  [docs/plans/README.md](docs/plans/README.md). A finished plan is marked
+  `done` and its behaviour moves into `docs/` — the plan keeps the reasoning,
+  the docs keep the truth.

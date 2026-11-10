@@ -113,6 +113,13 @@ Both are documented in [docs/deployment.md](docs/deployment.md), together with
 the panel mechanics, the port rules, the Traefik label gotcha and the
 symptom-to-cause table used to debug routing.
 
+## Plans
+
+Design work that is decided but not yet built lives in [docs/plans/](docs/plans/),
+one file per plan, each with a `Status:` line. Finished plans are marked `done`
+in place; the behaviour they describe moves into `docs/`. Open with
+[0001 — authentication](docs/plans/0001-authentication.md).
+
 ## Reverse proxy example
 
 Pin `WEB_PORT` in `.env` first — a proxy needs a fixed upstream port. Then configure Nginx or Traefik to forward the public site to `http://127.0.0.1:3000` (or whatever you pinned). For Nginx, allow the custom HTML body limit and disable buffering so AI Server-Sent Events stream through:
