@@ -62,6 +62,7 @@ COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/public ./public
 COPY --from=build --chown=node:node /app/server.mjs ./server.mjs
+COPY --from=build --chown=node:node /app/src/lib/server/auth.mjs ./src/lib/server/auth.mjs
 COPY --from=build --chown=node:node /app/src/composition-manifest.json ./src/composition-manifest.json
 # The CLI writes fonts and browser assets under the node user's cache. It runs
 # as root during the build, so hand those files back before switching USER.

@@ -31,6 +31,33 @@ Some panels split every line on the first `=` and keep the rest as a value, so a
 comment containing an equals sign becomes a broken variable. Never put one in a
 comment in that file. The file header repeats this rule.
 
+## Authentication
+
+Authentication is enabled by default. Set `AUTH_PASSWORD` to a random value of
+at least 16 characters before starting; otherwise the server refuses to start.
+`AUTH_ENABLED=false` is the only opt-out and logs a warning. Optional
+`AUTH_API_TOKEN` enables bearer access for scripts, separate from browser login;
+optional `AUTH_SECRET` signs sessions and rotating it invalidates existing
+browser sessions. Changing the password also invalidates sessions. Rotate the
+bearer token manually when needed.
+
+Use HTTPS for public access and keep `AUTH_COOKIE_SECURE=true`. Set it to false
+only for local HTTP or a protected tunnel. The browser login is at `/login`;
+API clients send `Authorization: Bearer <AUTH_API_TOKEN>`. Missing credentials
+receive `401` on APIs and a login redirect for browser navigation. `/healthz`
+and static `/assets/*` remain public.
+
+Set `TRUST_PROXY_HEADERS=true` only when requests reach the app through a trusted
+proxy that overwrites forwarded headers. It is used for login rate limiting and
+the external origin; do not expose the app directly while trusting client-supplied
+forwarded headers. Login allows 10 attempts per IP per five minutes.
+
+**Required behind Traefik/TLS termination:** set `TRUST_PROXY_HEADERS=true`
+and keep the application port inaccessible to untrusted direct clients.
+Without it, the app sees HTTP while the browser sends an HTTPS `Origin`, and
+every browser login POST fails with `403 invalid_origin`. Do not solve this
+by removing the origin check or disabling secure cookies.
+
 ## Ports
 
 - `BIND_ADDR` defaults to `127.0.0.1`: nothing is public unless you set `0.0.0.0`,
@@ -50,6 +77,7 @@ Labels are opt-in and inert while `TRAEFIK_ENABLE` is false. Set:
 TRAEFIK_ENABLE=true
 TRAEFIK_ROUTER=hf-v5
 TRAEFIK_HOST=v5.147.93.12.91.sslip.io
+TRUST_PROXY_HEADERS=true
 ```
 
 Router and service names are global to the proxy, so `TRAEFIK_ROUTER` must be

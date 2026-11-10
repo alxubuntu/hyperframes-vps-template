@@ -58,6 +58,10 @@ Full mechanics, port rules and Traefik routing: [docs/deployment.md](docs/deploy
 4. **Poll** `GET /api/render-status?id=<uuid>` until `completed` or `failed`.
 5. **Download** `GET /r/<uuid>`.
 
+When authentication is enabled, send `Authorization: Bearer <AUTH_API_TOKEN>`
+with API requests. Requests without credentials must be rejected before
+`server.mjs` reads or buffers their body.
+
 ## A composition that passes
 
 ```html
